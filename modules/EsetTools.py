@@ -1712,13 +1712,7 @@ class EsetProtectHubRegister(object):
                 # Try in-order: ddddocr -> simple OCR -> enhanced -> capsolver -> 2captcha
                 if self.solve_with_ddddocr():
                     return True
-                if self.solve_mtcaptcha_simple_ocr():
-                    return True
-                if self.solve_mtcaptcha_enhanced_ocr():
-                    return True
                 if self.solve_with_capsolver_fixed():
-                    return True
-                if self.solve_mtcaptcha_with_service_simple():
                     return True
 
             except Exception as e:
@@ -1727,13 +1721,9 @@ class EsetProtectHubRegister(object):
                 if hasattr(e, "name"):
                     pass
                 try:
-                    if self.solve_mtcaptcha_simple_ocr():
-                        return True
-                    if self.solve_mtcaptcha_enhanced_ocr():
+                    if self.solve_with_ddddocr():
                         return True
                     if self.solve_with_capsolver_fixed():
-                        return True
-                    if self.solve_mtcaptcha_with_service_simple():
                         return True
                 except:
                     pass
@@ -1815,16 +1805,9 @@ class EsetProtectHubRegister(object):
             for name in order_list:
                 if name == "ddddocr" and self.solve_with_ddddocr():
                     return True
-                if name == "ocr" and self.solve_mtcaptcha_simple_ocr():
-
-                    return True
-                if name == "enhanced_ocr" and self.solve_mtcaptcha_enhanced_ocr():
-                    return True
                 if name == "refresh" and self.refresh_until_easy_captcha():
                     return True
                 if name == "capsolver" and self.solve_with_capsolver_fixed():
-                    return True
-                if name == "2captcha" and self.solve_mtcaptcha_with_service_simple():
                     return True
             return False
 
