@@ -54,6 +54,11 @@ on:
           - main
           - test
         default: main
+      enable_audio_captcha:
+        description: 'Enable audio captcha fallback (default: false)'
+        required: false
+        default: 'false'
+        type: boolean
 
 jobs:
   generate-account-and-key:
