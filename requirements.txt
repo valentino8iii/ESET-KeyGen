@@ -1,3 +1,7 @@
 selenium
 requests
 colorama
+ddddocr
+2captcha-python
+SpeechRecognition
+pydub
