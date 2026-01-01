@@ -4,13 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'File version (e.g. 1.1.0.0)'
+        description: "File version (e.g. 1.1.0.0)"
         required: true
       tagname:
-        description: 'Tag name (e.g. 1.1.0.0-test)'
+        description: "Tag name (e.g. 1.1.0.0-test)"
         required: true
       release_name:
-        description: 'Release name'
+        description: "Release name"
         required: true
 
 jobs:
@@ -21,12 +21,12 @@ jobs:
     steps:
       - name: Checkout Repo
         uses: actions/checkout@v4
-      
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
-        
+          python-version: "3.11"
+
       - name: Compile
         run: |
           python -m pip install --upgrade pip
@@ -56,7 +56,7 @@ jobs:
         run: |
           mkdir legacy
           cd legacy
-          Invoke-WebRequest -Uri "https://github.com/rzc0d3r/ESET-KeyGen/releases/download/python380-portable-win32/python-v3.8.0-portable_win32.zip" -OutFile "python-portable.zip"
+          Invoke-WebRequest -Uri "https://github.com/valentino1983/ESET-KeyGen/releases/download/python380-portable-win32/python-v3.8.0-portable_win32.zip" -OutFile "python-portable.zip"
           Expand-Archive -Path "python-portable.zip" -DestinationPath .
           .\python.exe -m pip install --upgrade pip --no-warn-script-location
           .\python.exe -m pip install pyinstaller -r ../requirements.txt --no-warn-script-location
