@@ -1,22 +1,22 @@
 name: ProtectHub - Account and Key Generator
 
 on:
- # schedule: #if need schedule 
- #   - cron: "0 */2 * * *"
+  # schedule: #if need schedule
+  #   - cron: "0 */2 * * *"
   workflow_dispatch:
     inputs:
       account:
-        description: 'Number of Accounts to be generated (default = 0)'
+        description: "Number of Accounts to be generated (default = 0)"
         required: false
-        default: '0'
+        default: "0"
         type: string
       key:
-        description: 'Number of Keys to be generated (default = 1)'
+        description: "Number of Keys to be generated (default = 1)"
         required: false
-        default: '1'
+        default: "1"
         type: string
       mail:
-        description: 'Choose the mail provider to generate license'
+        description: "Choose the mail provider to generate license"
         required: true
         type: choice
         options:
@@ -30,14 +30,14 @@ on:
           - emailfake
         default: emailfake
       key_type:
-        description: 'Modes of operation'
+        description: "Modes of operation"
         required: true
         type: choice
         options:
           - --advanced-key
         default: --advanced-key
       os:
-        description: 'Operating System of runner (Linux, macOS, Windows)'
+        description: "Operating System of runner (Linux, macOS, Windows)"
         required: true
         type: choice
         options:
@@ -55,10 +55,15 @@ on:
           - test
         default: main
       enable_audio_captcha:
-        description: 'Enable audio captcha fallback (default: false)'
+        description: "Enable audio captcha fallback (default: false)"
         required: false
-        default: 'false'
+        default: false
         type: boolean
+      use_vpn:
+        description: "Enable Cloudflare WARP VPN"
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   generate-account-and-key:
@@ -66,7 +71,7 @@ jobs:
     steps:
       - name: Set Variables
         id: vars
-        shell: bash 
+        shell: bash
         run: |
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             echo "account=${{ github.event.inputs.account }}" >> $GITHUB_OUTPUT
@@ -74,12 +79,14 @@ jobs:
             echo "mail=${{ github.event.inputs.mail }}" >> $GITHUB_OUTPUT
             echo "key_type=${{ github.event.inputs.key_type }}" >> $GITHUB_OUTPUT
             echo "branch=${{ github.event.inputs.branch }}" >> $GITHUB_OUTPUT
+            echo "use_vpn=${{ github.event.inputs.use_vpn }}" >> $GITHUB_OUTPUT
           else #if fallback then
             echo "account=0" >> $GITHUB_OUTPUT
             echo "key=1" >> $GITHUB_OUTPUT
             echo "mail=emailfake" >> $GITHUB_OUTPUT
             echo "key_type=--key" >> $GITHUB_OUTPUT
             echo "branch=main" >> $GITHUB_OUTPUT
+            echo "use_vpn=false" >> $GITHUB_OUTPUT
           fi
 
       - name: Checkout Repository
@@ -88,6 +95,37 @@ jobs:
           repository: valentino1983/ESET-KeyGen # Optional if running in the same repo, but good for clarity
           ref: ${{ steps.vars.outputs.branch }}
           path: ESET-KeyGen
+
+      - name: Setup Cloudflare WARP VPN
+        if: runner.os == 'Linux' && steps.vars.outputs.use_vpn == 'true'
+        shell: bash
+        run: |
+          echo "Installing Cloudflare WARP..."
+          curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | sudo gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/cloudflare-client.list
+          sudo apt-get update
+          sudo apt-get install -y cloudflare-warp
+
+          echo "Registering WARP..."
+          warp-cli registration new
+
+          echo "Connecting to WARP..."
+          warp-cli connect
+          sleep 15
+
+          echo "Waiting for WARP connection..."
+          for i in {1..12}; do
+            status=$(warp-cli status)
+            echo "Status: $status"
+            if echo "$status" | grep -q "Connected"; then
+              echo "WARP is connected!"
+              break
+            fi
+            sleep 5
+          done
+
+          echo "Checking connection..."
+          curl -s https://www.cloudflare.com/cdn-cgi/trace/ | tee /dev/stderr | grep -q "warp=on" || echo "Warning: WARP may not be fully active"
 
       - name: Setup & Run Script (Linux/macOS)
         if: runner.os != 'Windows'
@@ -122,6 +160,56 @@ jobs:
             cat ./*KEYS.txt >> $GITHUB_STEP_SUMMARY 2>/dev/null || echo "None" >> $GITHUB_STEP_SUMMARY
           fi
 
+      - name: Cleanup WARP VPN
+        if: runner.os == 'Linux' && steps.vars.outputs.use_vpn == 'true' && always()
+        shell: bash
+        run: |
+          warp-cli disconnect || true
+          warp-cli registration delete || true
+
+      - name: Setup Cloudflare WARP VPN (Windows)
+        if: runner.os == 'Windows' && steps.vars.outputs.use_vpn == 'true'
+        shell: pwsh
+        run: |
+          Write-Host "Installing Cloudflare WARP for Windows..."
+          Invoke-WebRequest -Uri "https://1111-releases.cloudflareclient.com/windows/Cloudflare_WARP_Release-x64.msi" -OutFile "$env:TEMP\Cloudflare_WARP.msi"
+          Start-Process msiexec.exe -Wait -ArgumentList "/i $env:TEMP\Cloudflare_WARP.msi /qn"
+          Start-Sleep -Seconds 15
+
+          $warpCli = "C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe"
+
+          Write-Host "Accepting WARP ToS..."
+          & $warpCli registration new
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "Registration failed, trying license accept..."
+            & $warpCli registration license accept
+          }
+
+          Write-Host "Connecting to WARP..."
+          & $warpCli connect
+          Start-Sleep -Seconds 15
+
+          Write-Host "Waiting for WARP to be fully connected..."
+          $maxRetries = 12
+          $retryCount = 0
+          while ($retryCount -lt $maxRetries) {
+            $status = & $warpCli status
+            Write-Host "Status: $status"
+            if ($status -match "Connected") {
+              Write-Host "WARP is connected!"
+              break
+            }
+            Start-Sleep -Seconds 5
+            $retryCount++
+          }
+
+          Write-Host "Checking connection..."
+          $trace = Invoke-RestMethod -Uri "https://www.cloudflare.com/cdn-cgi/trace/"
+          Write-Host $trace
+          if ($trace -notmatch "warp=on") {
+            Write-Warning "WARP may not be fully active, but continuing..."
+          }
+
       - name: Setup & Run Script (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -146,4 +234,17 @@ jobs:
             python main.py --auto-detect-browser "$KEY_TYPE" --email-api "$MAIL" --skip-update-check --no-logo --disable-progress-bar --disable-logging --repeat $KEY
             echo "`nKey:" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
             Get-Content -Path ./*KEYS.txt -ErrorAction SilentlyContinue | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          }
+
+      - name: Cleanup WARP VPN (Windows)
+        if: runner.os == 'Windows' && steps.vars.outputs.use_vpn == 'true' && always()
+        shell: pwsh
+        run: |
+          $warpCli = "C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe"
+          if (Test-Path $warpCli) {
+            Write-Host "Disconnecting WARP..."
+            & $warpCli disconnect 2>&1 | Out-Null
+            Start-Sleep -Seconds 3
+            Write-Host "Deleting WARP registration..."
+            & $warpCli registration delete 2>&1 | Out-Null
           }
