@@ -1,11 +1,11 @@
-from .SharedTools import *
-
-from email import policy, parser
-
-import requests
+import random
 import time
 import uuid
-import random
+from email import parser, policy
+
+import requests
+
+from .SharedTools import *
 
 DEFINE_PARSE_10MINUTEMAIL_INBOX_FUNCTION = """function parse_10minutemail_inbox() {
     updatemailbox()
@@ -57,7 +57,8 @@ if (!schranka) {
     // Element not found, return empty inbox
     return inbox;
 }
-let raw_inbox = Array.from(schranka.children).slice(0, -3);
+// Parse ALL rows with data-href attribute (email rows)
+let raw_inbox = Array.from(schranka.children).filter(row => row.dataset.href);
 for (let i = 0; i < raw_inbox.length; i++) {
     let id = raw_inbox[i].dataset.href;
     let from = raw_inbox[i].children[0]?.children[1]?.tagName?.toLowerCase() || "";
@@ -110,142 +111,163 @@ for (let i = 0; i < messages.length; i++)
 return inbox
 """
 
+
 class OneSecEmailAPI:
     def __init__(self):
-        self.class_name = '1secmail'
+        self.class_name = "1secmail"
         self.__login = None
         self.__domain = None
         self.email = None
-        self.__api = 'https://www.1secmail.com/api/v1/'
-        
+        self.__api = "https://www.1secmail.com/api/v1/"
+
     def init(self):
-        url = f'{self.__api}?action=genRandomMailbox&count=1'
+        url = f"{self.__api}?action=genRandomMailbox&count=1"
         try:
             r = requests.get(url)
         except:
-            raise RuntimeError('SecEmailAPI: API access error!')
+            raise RuntimeError("SecEmailAPI: API access error!")
         if r.status_code != 200:
-            raise RuntimeError('SecEmailAPI: API access error!')
-        self.__login, self.__domain = str(r.content, 'utf-8')[2:-2].split('@')
-        self.email = self.__login+'@'+self.__domain
-    
+            raise RuntimeError("SecEmailAPI: API access error!")
+        self.__login, self.__domain = str(r.content, "utf-8")[2:-2].split("@")
+        self.email = self.__login + "@" + self.__domain
+
     def login(self, login, domain):
         self.__login = login
         self.__domain = domain
-    
+
     def read_email(self):
-        url = f'{self.__api}?action=getMessages&login={self.__login}&domain={self.__domain}'
+        url = f"{self.__api}?action=getMessages&login={self.__login}&domain={self.__domain}"
         print(url)
         try:
             r = requests.get(url)
         except:
-            raise RuntimeError('SecEmailAPI: API access error!')
+            raise RuntimeError("SecEmailAPI: API access error!")
         if r.status_code != 200:
-            raise RuntimeError('SecEmailAPI: API access error!')
+            raise RuntimeError("SecEmailAPI: API access error!")
         return r.json()
-    
+
     def get_message(self, message_id):
-        url = f'{self.__api}?action=readMessage&login={self.__login}&domain={self.__domain}&id={message_id}'
+        url = f"{self.__api}?action=readMessage&login={self.__login}&domain={self.__domain}&id={message_id}"
         print(url)
         try:
             r = requests.get(url)
         except:
-            raise RuntimeError('SecEmailAPI: API access error!')
+            raise RuntimeError("SecEmailAPI: API access error!")
         if r.status_code != 200:
-            raise RuntimeError('SecEmailAPI: API access error!')
+            raise RuntimeError("SecEmailAPI: API access error!")
         return r.json()
+
 
 class DeveloperMailAPI:
     def __init__(self):
-        self.class_name = 'developermail'
+        self.class_name = "developermail"
         self.email = None
-        self.email_name = ''
+        self.email_name = ""
         self.headers = {}
-        self.api_url = 'https://www.developermail.com/api/v1'
-    
+        self.api_url = "https://www.developermail.com/api/v1"
+
     def init(self):
-        r = requests.put(f'{self.api_url}/mailbox')
-        self.email_name, token = list(r.json()['result'].values())
-        self.email = self.email_name+'@developermail.com'
-        self.headers = {'X-MailboxToken': token}
+        r = requests.put(f"{self.api_url}/mailbox")
+        self.email_name, token = list(r.json()["result"].values())
+        self.email = self.email_name + "@developermail.com"
+        self.headers = {"X-MailboxToken": token}
 
     def __parse_message(self, raw_message_body):
-        message_bytes = raw_message_body.encode('utf-8')
+        message_bytes = raw_message_body.encode("utf-8")
         msg = parser.BytesParser(policy=policy.default).parsebytes(message_bytes)
-        message_subject = msg['subject']
-        message_from = msg['from']
-        message_body = str(msg.get_payload(decode=True).decode(msg.get_content_charset())) # decoding MIME-Type to html
-        return {'subject':message_subject, 'from':message_from, 'body':message_body}
+        message_subject = msg["subject"]
+        message_from = msg["from"]
+        message_body = str(
+            msg.get_payload(decode=True).decode(msg.get_content_charset())
+        )  # decoding MIME-Type to html
+        return {"subject": message_subject, "from": message_from, "body": message_body}
 
     def get_messages(self):
         # get message IDs
         r = requests.get(
-            f'{self.api_url}/mailbox/{self.email_name}',
-            headers=self.headers
+            f"{self.api_url}/mailbox/{self.email_name}", headers=self.headers
         )
-        message_ids = r.json()['result']
+        message_ids = r.json()["result"]
         if message_ids == []:
             return None
         # parse messages
         messages = []
         for message_id in message_ids:
             try:
-                r = requests.get(f'{self.api_url}/mailbox/{self.email_name}/messages/{message_id}', headers=self.headers)
-                raw_message_body = r.json()['result']
+                r = requests.get(
+                    f"{self.api_url}/mailbox/{self.email_name}/messages/{message_id}",
+                    headers=self.headers,
+                )
+                raw_message_body = r.json()["result"]
                 messages.append(self.__parse_message(raw_message_body))
             except:
                 continue
         if messages == []:
             messages = None
         return messages
-    
+
+
 class GuerRillaMailAPI:
     def __init__(self, driver: Chrome):
-        self.class_name = 'guerrillamail'
+        self.class_name = "guerrillamail"
         self.driver = driver
         self.email = None
         self.window_handle = None
 
-    def init(self):     
-        self.driver.get('https://www.guerrillamail.com/')
+    def init(self):
+        self.driver.get("https://www.guerrillamail.com/")
         self.window_handle = self.driver.current_window_handle
         untilConditionExecute(self.driver, f'return {GET_EBID}("email-widget") != null')
-        self.email = self.driver.execute_script(f'return {GET_EBID}("email-widget").innerText')
+        self.email = self.driver.execute_script(
+            f'return {GET_EBID}("email-widget").innerText'
+        )
         # change to random available domain
-        self.email = self.email.split('@')[0]+'@'+random.choice(self.driver.execute_script(GET_GUERRILLAMAIL_DOMAINS))
-    
+        self.email = (
+            self.email.split("@")[0]
+            + "@"
+            + random.choice(self.driver.execute_script(GET_GUERRILLAMAIL_DOMAINS))
+        )
+
     def parse_inbox(self):
         self.driver.switch_to.window(self.window_handle)
-        self.driver.get('https://www.guerrillamail.com/')
+        self.driver.get("https://www.guerrillamail.com/")
         inbox = self.driver.execute_script(PARSE_GUERRILLAMAIL_INBOX)
         return inbox
 
     def open_mail(self, id):
         self.driver.switch_to.window(self.window_handle)
-        self.driver.get(f'https://www.guerrillamail.com/inbox?mail_id={id}')
+        self.driver.get(f"https://www.guerrillamail.com/inbox?mail_id={id}")
+
 
 class MailTickingAPI:
     def __init__(self, driver: Chrome):
-        self.class_name = 'mailticking'
+        self.class_name = "mailticking"
         self.driver = driver
         self.email = None
         self.window_handle = None
 
     def init(self):
         try:
-            self.driver.get('https://www.mailticking.com')
+            self.driver.get("https://www.mailticking.com")
             self.window_handle = self.driver.current_window_handle
-            untilConditionExecute(self.driver, f'return {CLICK_WITH_BOOL}({GET_EBCN}("modal-footer text-center")[1].children[0])')
-            untilConditionExecute(self.driver, f'return {GET_EBID}("active-mail") != null')
+            untilConditionExecute(
+                self.driver,
+                f'return {CLICK_WITH_BOOL}({GET_EBCN}("modal-footer text-center")[1].children[0])',
+            )
+            untilConditionExecute(
+                self.driver, f'return {GET_EBID}("active-mail") != null'
+            )
             time.sleep(3)
-            self.email = self.driver.execute_script(f'return {GET_EBID}("active-mail").value')
+            self.email = self.driver.execute_script(
+                f'return {GET_EBID}("active-mail").value'
+            )
             return True
         except:
             raise RuntimeError("MailTickingAPI.init Error!")
-    
+
     def parse_inbox(self):
         self.driver.switch_to.window(self.window_handle)
-        self.driver.get('https://www.mailticking.com')
+        self.driver.get("https://www.mailticking.com")
         try:
             self.driver.execute_script(f'return {GET_EBID}("refresh-button")').click()
             time.sleep(1)
@@ -258,43 +280,53 @@ class MailTickingAPI:
         self.driver.switch_to.window(self.window_handle)
         self.driver.get(id)
 
+
 class FakeMailAPI:
     def __init__(self, driver: Chrome):
-        self.class_name = 'fakemail'
+        self.class_name = "fakemail"
         self.driver = driver
         self.email = None
         self.window_handle = None
 
-    def init(self):     
-        self.driver.get('https://www.fakemail.net')
+    def init(self):
+        self.driver.get("https://www.fakemail.net")
         self.window_handle = self.driver.current_window_handle
-        untilConditionExecute(self.driver, f'return {GET_EBID}("email").innerText != null')
+        untilConditionExecute(
+            self.driver, f'return {GET_EBID}("email").innerText != null'
+        )
         self.email = self.driver.execute_script(f'return {GET_EBID}("email").innerText')
-    
+
     def parse_inbox(self):
         self.driver.switch_to.window(self.window_handle)
-        self.driver.get('https://www.fakemail.net')
+        self.driver.get("https://www.fakemail.net")
         inbox = self.driver.execute_script(PARSE_FAKEMAIL_INBOX)
+        if not inbox:
+            print("[ DEBUG ] Fakemail inbox is empty. Saving debug dump...")
+            with open("fakemail_debug.html", "w", encoding="utf-8") as f:
+                f.write(self.driver.page_source)
         return inbox
 
     def open_mail(self, id):
         self.driver.switch_to.window(self.window_handle)
-        self.driver.get(f'https://www.fakemail.net/email/id/{id}')
+        self.driver.get(f"https://www.fakemail.net/email/id/{id}")
+
 
 class InboxesAPI:
     def __init__(self, driver: Chrome):
-        self.class_name = 'inboxes'
+        self.class_name = "inboxes"
         self.driver = driver
         self.email = None
         self.window_handle = None
-    
+
     def init(self):
-        self.driver.get('https://inboxes.com')
+        self.driver.get("https://inboxes.com")
         self.window_handle = self.driver.current_window_handle
         button = None
         for _ in range(DEFAULT_MAX_ITER):
             try:
-                button = self.driver.find_element('xpath', '//button[contains(text(), "Get my first inbox!")]')
+                button = self.driver.find_element(
+                    "xpath", '//button[contains(text(), "Get my first inbox!")]'
+                )
                 break
             except:
                 pass
@@ -303,30 +335,35 @@ class InboxesAPI:
             button.click()
             time.sleep(1)
             for button in self.driver.execute_script(f'return {GET_EBTN}("button")'):
-                if button.text.strip().lower() == 'choose for me':
+                if button.text.strip().lower() == "choose for me":
                     button.click()
                     break
             time.sleep(2)
             for element in self.driver.execute_script(f'return {GET_EBTN}("span")'):
-                new_email = ''.join(element.text.split())
+                new_email = "".join(element.text.split())
                 if new_email is not None:
-                    new_email = re.match(r'[-a-z0-9+.]+@[a-z]+(\.[a-z]+)+', new_email)
+                    new_email = re.match(r"[-a-z0-9+.]+@[a-z]+(\.[a-z]+)+", new_email)
                     if new_email is not None:
                         self.email = new_email.group()
                         break
-    
+
     def get_messages(self):
-        r = requests.get(f'https://inboxes.com/api/v2/inbox/{self.email}')
-        raw_inbox = r.json()['msgs']
+        r = requests.get(f"https://inboxes.com/api/v2/inbox/{self.email}")
+        raw_inbox = r.json()["msgs"]
         messages = []
         for message in raw_inbox:
-            r = requests.get(f'https://inboxes.com/api/v2/message/{message["uid"]}').json()
-            messages.append({
-                'from': r['ff'][0]['address'],
-                'subject': message['s'],
-                'body': r['html']
-            })
+            r = requests.get(
+                f"https://inboxes.com/api/v2/message/{message['uid']}"
+            ).json()
+            messages.append(
+                {
+                    "from": r["ff"][0]["address"],
+                    "subject": message["s"],
+                    "body": r["html"],
+                }
+            )
         return messages
+
 
 """class OneSecMailProAPI:
     def __init__(self, driver: Chrome):
@@ -367,18 +404,24 @@ class InboxesAPI:
                 pass
             time.sleep(DEFAULT_DELAY)"""
 
+
 class IncognitoMailAPI:
     def __init__(self, driver: Chrome):
-        self.class_name = 'incognitomail'
+        self.class_name = "incognitomail"
         self.driver = driver
         self.email = None
         self.window_handle = None
-    
+
     def init(self):
         self.driver.get("https://incognitomail.co/")
         self.window_handle = self.driver.current_window_handle
-        untilConditionExecute(self.driver, f"return {GET_EBAV}('button', 'aria-label', 'Email dropdown').textContent != 'Creating...'")
-        self.email = self.driver.execute_script(f"return {GET_EBAV}('button', 'aria-label', 'Email dropdown').textContent")
+        untilConditionExecute(
+            self.driver,
+            f"return {GET_EBAV}('button', 'aria-label', 'Email dropdown').textContent != 'Creating...'",
+        )
+        self.email = self.driver.execute_script(
+            f"return {GET_EBAV}('button', 'aria-label', 'Email dropdown').textContent"
+        )
 
     def parse_inbox(self):
         self.driver.switch_to.window(self.window_handle)
@@ -397,9 +440,10 @@ class IncognitoMailAPI:
         self.driver.switch_to.window(self.window_handle)
         web_element.click()
 
+
 class EmailFakeAPI:
     def __init__(self, driver):
-        self.class_name = 'emailfake'
+        self.class_name = "emailfake"
         self.driver = driver
         self.window_handle = None
         self.email = None
@@ -407,16 +451,22 @@ class EmailFakeAPI:
         self.first_parse = True
 
     def init(self):
-        self.driver.get('https://emailfake.com/fake_email_generator')
+        self.driver.get("https://emailfake.com/fake_email_generator")
         self.window_handle = self.driver.current_window_handle
-        untilConditionExecute(self.driver, f"return {GET_EBID}('email_ch_text').innerText.trim() !== ''", max_iter=15)
-        self.email = self.driver.execute_script(f"return {GET_EBID}('email_ch_text').innerText.trim()")
-        self.driver.get('https://emailfake.com')
-    
+        untilConditionExecute(
+            self.driver,
+            f"return {GET_EBID}('email_ch_text').innerText.trim() !== ''",
+            max_iter=15,
+        )
+        self.email = self.driver.execute_script(
+            f"return {GET_EBID}('email_ch_text').innerText.trim()"
+        )
+        self.driver.get("https://emailfake.com")
+
     def parse_inbox(self):
         self.driver.switch_to.window(self.window_handle)
         if self.opened_mail or self.first_parse:
-            self.driver.get('https://emailfake.com')
+            self.driver.get("https://emailfake.com")
             self.opened_mail = False
             self.first_parse = True
         try:
@@ -425,198 +475,202 @@ class EmailFakeAPI:
                 return inbox
         except:
             return []
-    
+
     def open_mail(self, url):
         self.driver.switch_to.window(self.window_handle)
         self.driver.get(url)
         self.opened_mail = True
 
+
 class MailSlurpAPI:
     def __init__(self):
-        self.class_name = 'mailslurp'
+        self.class_name = "mailslurp"
         self.email = None
         self.inbox_id = None
         self.api_key = None
-        self.base_url = 'https://api.mailslurp.com'
+        self.base_url = "https://api.mailslurp.com"
         self.headers = {}
-    
+
     def set_api_key(self, api_key):
         """Set MailSlurp API key from environment or config"""
         self.api_key = api_key
-        self.headers = {
-            'x-api-key': self.api_key,
-            'Content-Type': 'application/json'
-        }
-    
+        self.headers = {"x-api-key": self.api_key, "Content-Type": "application/json"}
+
     def init(self):
         """Create a new inbox in MailSlurp"""
         if not self.api_key:
-            raise RuntimeError('MailSlurpAPI: API key not set! Set via environment variable MAILSLURP_API_KEY')
-        
-        try:
-            r = requests.post(
-                f'{self.base_url}/inboxes',
-                headers=self.headers,
-                json={}
+            raise RuntimeError(
+                "MailSlurpAPI: API key not set! Set via environment variable MAILSLURP_API_KEY"
             )
+
+        try:
+            r = requests.post(f"{self.base_url}/inboxes", headers=self.headers, json={})
             if r.status_code != 201:
-                raise RuntimeError(f'MailSlurpAPI: Failed to create inbox - {r.status_code}')
-            
+                raise RuntimeError(
+                    f"MailSlurpAPI: Failed to create inbox - {r.status_code}"
+                )
+
             result = r.json()
-            self.inbox_id = result['id']
-            self.email = result['emailAddress']
+            self.inbox_id = result["id"]
+            self.email = result["emailAddress"]
         except Exception as e:
-            raise RuntimeError(f'MailSlurpAPI: {str(e)}')
-    
+            raise RuntimeError(f"MailSlurpAPI: {str(e)}")
+
     def get_messages(self):
         """Retrieve messages from MailSlurp inbox"""
         if not self.inbox_id:
-            raise RuntimeError('MailSlurpAPI: Inbox not initialized!')
-        
+            raise RuntimeError("MailSlurpAPI: Inbox not initialized!")
+
         try:
             r = requests.get(
-                f'{self.base_url}/inboxes/{self.inbox_id}/emails',
-                headers=self.headers
+                f"{self.base_url}/inboxes/{self.inbox_id}/emails", headers=self.headers
             )
             if r.status_code != 200:
                 return []
-            
+
             emails = r.json()
             messages = []
             for email in emails:
-                messages.append({
-                    'from': email.get('from', ''),
-                    'subject': email.get('subject', ''),
-                    'body': email.get('body', '')
-                })
+                messages.append(
+                    {
+                        "from": email.get("from", ""),
+                        "subject": email.get("subject", ""),
+                        "body": email.get("body", ""),
+                    }
+                )
             return messages
         except:
             return []
-    
+
     def get_message(self, email_id):
         """Get a specific message by ID"""
         try:
-            r = requests.get(
-                f'{self.base_url}/emails/{email_id}',
-                headers=self.headers
-            )
+            r = requests.get(f"{self.base_url}/emails/{email_id}", headers=self.headers)
             if r.status_code == 200:
                 email = r.json()
                 return {
-                    'from': email.get('from', ''),
-                    'subject': email.get('subject', ''),
-                    'body': email.get('body', '')
+                    "from": email.get("from", ""),
+                    "subject": email.get("subject", ""),
+                    "body": email.get("body", ""),
                 }
         except:
             pass
         return None
-    
+
     def cleanup(self):
         """Delete inbox after use"""
         if self.inbox_id:
             try:
                 requests.delete(
-                    f'{self.base_url}/inboxes/{self.inbox_id}',
-                    headers=self.headers
+                    f"{self.base_url}/inboxes/{self.inbox_id}", headers=self.headers
                 )
             except:
                 pass
 
+
 class MailsacAPI:
     def __init__(self):
-        self.class_name = 'mailsac'
+        self.class_name = "mailsac"
         self.email = None
         self.api_key = None
-        self.base_url = 'https://api.mailsac.com'
+        self.base_url = "https://api.mailsac.com"
         self.headers = {}
-    
+
     def set_api_key(self, api_key):
         """Set Mailsac API key from environment or config"""
         self.api_key = api_key
-        self.headers = {
-            'Mailsac-Key': self.api_key,
-            'Content-Type': 'application/json'
-        }
-    
+        self.headers = {"Mailsac-Key": self.api_key, "Content-Type": "application/json"}
+
     def init(self):
         """Generate a random email address (Mailsac allows free public inboxes)"""
         if not self.api_key:
-            raise RuntimeError('MailsacAPI: API key not set! Set via environment variable MAILSAC_API_KEY')
-        
+            raise RuntimeError(
+                "MailsacAPI: API key not set! Set via environment variable MAILSAC_API_KEY"
+            )
+
         try:
             # Generate random email
             random_name = str(uuid.uuid4())[:8]
-            self.email = f'{random_name}@mailsac.com'
+            self.email = f"{random_name}@mailsac.com"
         except Exception as e:
-            raise RuntimeError(f'MailsacAPI: {str(e)}')
-    
+            raise RuntimeError(f"MailsacAPI: {str(e)}")
+
     def get_messages(self):
         """Retrieve messages from Mailsac inbox"""
         if not self.email:
-            raise RuntimeError('MailsacAPI: Email not initialized!')
-        
+            raise RuntimeError("MailsacAPI: Email not initialized!")
+
         try:
             r = requests.get(
-                f'{self.base_url}/messages',
+                f"{self.base_url}/messages",
                 headers=self.headers,
-                params={'to': self.email}
+                params={"to": self.email},
             )
             if r.status_code != 200:
                 return []
-            
+
             emails = r.json()
             messages = []
             for email in emails:
-                messages.append({
-                    'from': email.get('from', ''),
-                    'subject': email.get('subject', ''),
-                    'body': email.get('body', '')
-                })
+                messages.append(
+                    {
+                        "from": email.get("from", ""),
+                        "subject": email.get("subject", ""),
+                        "body": email.get("body", ""),
+                    }
+                )
             return messages
         except:
             return []
-    
+
     def get_message(self, message_id):
         """Get a specific message by ID"""
         try:
             r = requests.get(
-                f'{self.base_url}/messages/{message_id}',
-                headers=self.headers
+                f"{self.base_url}/messages/{message_id}", headers=self.headers
             )
             if r.status_code == 200:
                 email = r.json()
                 return {
-                    'from': email.get('from', ''),
-                    'subject': email.get('subject', ''),
-                    'body': email.get('body', '')
+                    "from": email.get("from", ""),
+                    "subject": email.get("subject", ""),
+                    "body": email.get("body", ""),
                 }
         except:
             pass
         return None
 
+
 class TempMailOrgAPI:
     def __init__(self, driver: Chrome):
-        self.class_name = 'tempmail'
+        self.class_name = "tempmail"
         self.driver = driver
         self.email = None
         self.window_handle = None
-    
+
     def init(self):
         """Initialize temp-mail.org inbox"""
-        self.driver.get('https://temp-mail.org/en/')
+        self.driver.get("https://temp-mail.org/en/")
         self.window_handle = self.driver.current_window_handle
-        untilConditionExecute(self.driver, "return document.getElementById('mail') != null && document.getElementById('mail').value.trim() !== ''", max_iter=20)
-        self.email = self.driver.execute_script("return document.getElementById('mail').value.trim()")
-    
+        untilConditionExecute(
+            self.driver,
+            "return document.getElementById('mail') != null && document.getElementById('mail').value.trim() !== ''",
+            max_iter=20,
+        )
+        self.email = self.driver.execute_script(
+            "return document.getElementById('mail').value.trim()"
+        )
+
     def parse_inbox(self):
         """Parse inbox for messages"""
         self.driver.switch_to.window(self.window_handle)
-        self.driver.get('https://temp-mail.org/en/')
+        self.driver.get("https://temp-mail.org/en/")
         try:
             # Wait for inbox to load
             time.sleep(2)
             # Check if there are any messages
-            inbox = self.driver.execute_script("""
+            inbox = self.driver.execute_script(
+                """
                 let inbox = [];
                 let messageRows = document.querySelectorAll('table tbody tr');
                 for (let i = 0; i < messageRows.length; i++) {
@@ -631,11 +685,12 @@ class TempMailOrgAPI:
                     }
                 }
                 return inbox;
-            """)
+            """
+            )
             return inbox if inbox else []
         except:
             return []
-    
+
     def open_mail(self, mail_id):
         """Open a specific email"""
         self.driver.switch_to.window(self.window_handle)
@@ -646,9 +701,19 @@ class TempMailOrgAPI:
         except:
             pass
 
+
 class CustomEmailAPI:
     def __init__(self):
-        self.class_name = 'custom'
+        self.class_name = "custom"
         self.email = None
 
-WEB_WRAPPER_EMAIL_APIS_CLASSES = (GuerRillaMailAPI, MailTickingAPI, FakeMailAPI, InboxesAPI, IncognitoMailAPI, EmailFakeAPI, TempMailOrgAPI)
+
+WEB_WRAPPER_EMAIL_APIS_CLASSES = (
+    GuerRillaMailAPI,
+    MailTickingAPI,
+    FakeMailAPI,
+    InboxesAPI,
+    IncognitoMailAPI,
+    EmailFakeAPI,
+    TempMailOrgAPI,
+)

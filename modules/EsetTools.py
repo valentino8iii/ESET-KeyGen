@@ -1,92 +1,185 @@
-from .EmailAPIs import *
-
+import base64
+import io
+import logging
+import random
+import re
+import subprocess
+import sys
+import time
 from pathlib import Path
 
-import subprocess
 import colorama
-import logging
-import time
-import sys
-import io
-import base64
-import re
-import random
-
+from selenium.common.exceptions import TimeoutException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
-from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException
+from selenium.webdriver.support.ui import WebDriverWait
 from twocaptcha import TwoCaptcha
 
-# Optional OCR dependencies (pytesseract + Pillow)
+from .EmailAPIs import *
+
+# Image processing dependencies (used by ddddocr)
 try:
-    import pytesseract
     from PIL import Image, ImageEnhance, ImageFilter, ImageOps
-    OCR_AVAILABLE = True
+
+    PIL_AVAILABLE = True
 except Exception:
-    pytesseract = None
     Image = None
     ImageEnhance = None
     ImageFilter = None
     ImageOps = None
-    OCR_AVAILABLE = False
+    PIL_AVAILABLE = False
 
-SILENT_MODE = '--silent' in sys.argv
+SILENT_MODE = "--silent" in sys.argv
 
 # Environment control for debug artifact generation
 import os
 
+
 def generate_debug_artifacts_enabled():
     """Return True if GENERATE_DEBUG_ARTIFACTS env var is set to a truthy value."""
-    return os.getenv('GENERATE_DEBUG_ARTIFACTS', 'false').lower() in ('1', 'true', 'yes')
+    return os.getenv("GENERATE_DEBUG_ARTIFACTS", "false").lower() in (
+        "1",
+        "true",
+        "yes",
+    )
 
-def ensure_tesseract_path():
-    """Ensure pytesseract knows the path to the tesseract executable on Windows.
-    Returns True if path looks good, False otherwise.
-    """
-    if not OCR_AVAILABLE:
-        return False
-    try:
-        # If already set and exists, we're good
-        cmd = pytesseract.pytesseract.tesseract_cmd
-        if cmd and os.path.exists(cmd):
-            return True
-    except Exception:
-        pass
-    # Try common Windows install location
-    common = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-    if os.path.exists(common):
-        try:
-            pytesseract.pytesseract.tesseract_cmd = common
-            return True
-        except Exception:
-            return False
-    # Otherwise give a clear message
-    return False
 
 # Random name lists for generating realistic names
 FIRST_NAMES = [
-    'James', 'Mary', 'John', 'Patricia', 'Robert', 'Jennifer', 'Michael', 'Linda',
-    'William', 'Barbara', 'David', 'Elizabeth', 'Richard', 'Susan', 'Joseph', 'Jessica',
-    'Thomas', 'Sarah', 'Charles', 'Karen', 'Christopher', 'Nancy', 'Daniel', 'Lisa',
-    'Matthew', 'Betty', 'Anthony', 'Margaret', 'Mark', 'Sandra', 'Donald', 'Ashley',
-    'Steven', 'Kimberly', 'Paul', 'Emily', 'Andrew', 'Donna', 'Joshua', 'Michelle',
-    'Kevin', 'Carol', 'Brian', 'Amanda', 'George', 'Dorothy', 'Edward', 'Melissa',
-    'Ronald', 'Deborah', 'Timothy', 'Stephanie', 'Jason', 'Rebecca', 'Jeffrey', 'Sharon',
-    'Ryan', 'Laura', 'Jacob', 'Cynthia', 'Gary', 'Kathleen', 'Nicholas', 'Amy'
+    "James",
+    "Mary",
+    "John",
+    "Patricia",
+    "Robert",
+    "Jennifer",
+    "Michael",
+    "Linda",
+    "William",
+    "Barbara",
+    "David",
+    "Elizabeth",
+    "Richard",
+    "Susan",
+    "Joseph",
+    "Jessica",
+    "Thomas",
+    "Sarah",
+    "Charles",
+    "Karen",
+    "Christopher",
+    "Nancy",
+    "Daniel",
+    "Lisa",
+    "Matthew",
+    "Betty",
+    "Anthony",
+    "Margaret",
+    "Mark",
+    "Sandra",
+    "Donald",
+    "Ashley",
+    "Steven",
+    "Kimberly",
+    "Paul",
+    "Emily",
+    "Andrew",
+    "Donna",
+    "Joshua",
+    "Michelle",
+    "Kevin",
+    "Carol",
+    "Brian",
+    "Amanda",
+    "George",
+    "Dorothy",
+    "Edward",
+    "Melissa",
+    "Ronald",
+    "Deborah",
+    "Timothy",
+    "Stephanie",
+    "Jason",
+    "Rebecca",
+    "Jeffrey",
+    "Sharon",
+    "Ryan",
+    "Laura",
+    "Jacob",
+    "Cynthia",
+    "Gary",
+    "Kathleen",
+    "Nicholas",
+    "Amy",
 ]
 
 LAST_NAMES = [
-    'Smith', 'Johnson', 'Williams', 'Brown', 'Jones', 'Garcia', 'Miller', 'Davis',
-    'Rodriguez', 'Martinez', 'Hernandez', 'Lopez', 'Gonzalez', 'Wilson', 'Anderson', 'Thomas',
-    'Taylor', 'Moore', 'Jackson', 'Martin', 'Lee', 'Perez', 'Thompson', 'White',
-    'Harris', 'Sanchez', 'Clark', 'Ramirez', 'Lewis', 'Robinson', 'Walker', 'Young',
-    'Allen', 'King', 'Wright', 'Scott', 'Torres', 'Nguyen', 'Hill', 'Flores',
-    'Green', 'Adams', 'Nelson', 'Baker', 'Hall', 'Rivera', 'Campbell', 'Mitchell',
-    'Carter', 'Roberts', 'Gomez', 'Phillips', 'Evans', 'Turner', 'Diaz', 'Parker',
-    'Cruz', 'Edwards', 'Collins', 'Reyes', 'Stewart', 'Morris', 'Morales', 'Murphy'
+    "Smith",
+    "Johnson",
+    "Williams",
+    "Brown",
+    "Jones",
+    "Garcia",
+    "Miller",
+    "Davis",
+    "Rodriguez",
+    "Martinez",
+    "Hernandez",
+    "Lopez",
+    "Gonzalez",
+    "Wilson",
+    "Anderson",
+    "Thomas",
+    "Taylor",
+    "Moore",
+    "Jackson",
+    "Martin",
+    "Lee",
+    "Perez",
+    "Thompson",
+    "White",
+    "Harris",
+    "Sanchez",
+    "Clark",
+    "Ramirez",
+    "Lewis",
+    "Robinson",
+    "Walker",
+    "Young",
+    "Allen",
+    "King",
+    "Wright",
+    "Scott",
+    "Torres",
+    "Nguyen",
+    "Hill",
+    "Flores",
+    "Green",
+    "Adams",
+    "Nelson",
+    "Baker",
+    "Hall",
+    "Rivera",
+    "Campbell",
+    "Mitchell",
+    "Carter",
+    "Roberts",
+    "Gomez",
+    "Phillips",
+    "Evans",
+    "Turner",
+    "Diaz",
+    "Parker",
+    "Cruz",
+    "Edwards",
+    "Collins",
+    "Reyes",
+    "Stewart",
+    "Morris",
+    "Morales",
+    "Murphy",
 ]
+
 
 def generate_random_name():
     """Generate a random realistic full name"""
@@ -94,12 +187,16 @@ def generate_random_name():
     last_name = random.choice(LAST_NAMES)
     return f"{first_name} {last_name}"
 
+
 class IPBlockedException(Exception):
     def __init__(self, message):
         super().__init__(message)
 
+
 class EsetRegister(object):
-    def __init__(self, registered_email_obj: OneSecEmailAPI, eset_password: str, driver: Chrome):
+    def __init__(
+        self, registered_email_obj: OneSecEmailAPI, eset_password: str, driver: Chrome
+    ):
         self.email_obj = registered_email_obj
         self.eset_password = eset_password
         self.driver = driver
@@ -108,198 +205,280 @@ class EsetRegister(object):
     def createAccount(self):
         exec_js = self.driver.execute_script
         uCE = untilConditionExecute
-        
-        logging.info('[EMAIL] Register page loading...')
-        console_log('\n[EMAIL] Register page loading...', INFO, silent_mode=SILENT_MODE)
-        if isinstance(self.email_obj, WEB_WRAPPER_EMAIL_APIS_CLASSES):
-            self.driver.switch_to.new_window('tab')
-            self.window_handle = self.driver.current_window_handle
-        self.driver.get('https://login.eset.com/Register')
-        uCE(self.driver, f"return {GET_EBID}('email') != null")
-        logging.info('[EMAIL] Register page is loaded!')
-        console_log('[EMAIL] Register page is loaded!', OK, silent_mode=SILENT_MODE)
 
-        logging.info('Bypassing cookies...')
-        console_log('\nBypassing cookies...', INFO, silent_mode=SILENT_MODE)
-        if uCE(self.driver, f"return {CLICK_WITH_BOOL}({GET_EBAV}('button', 'id', 'cc-accept'))", max_iter=10, raise_exception_if_failed=False):
-            logging.info('Cookies successfully bypassed!')
-            console_log('Cookies successfully bypassed!', OK, silent_mode=SILENT_MODE)
-            time.sleep(1) # Once pressed, you have to wait a little while. If code do not do this, the site does not count the acceptance of cookies
+        logging.info("[EMAIL] Register page loading...")
+        console_log("\n[EMAIL] Register page loading...", INFO, silent_mode=SILENT_MODE)
+        if isinstance(self.email_obj, WEB_WRAPPER_EMAIL_APIS_CLASSES):
+            self.driver.switch_to.new_window("tab")
+            self.window_handle = self.driver.current_window_handle
+        self.driver.get("https://login.eset.com/Register")
+        uCE(self.driver, f"return {GET_EBID}('email') != null")
+        logging.info("[EMAIL] Register page is loaded!")
+        console_log("[EMAIL] Register page is loaded!", OK, silent_mode=SILENT_MODE)
+
+        logging.info("Bypassing cookies...")
+        console_log("\nBypassing cookies...", INFO, silent_mode=SILENT_MODE)
+        if uCE(
+            self.driver,
+            f"return {CLICK_WITH_BOOL}({GET_EBAV}('button', 'id', 'cc-accept'))",
+            max_iter=10,
+            raise_exception_if_failed=False,
+        ):
+            logging.info("Cookies successfully bypassed!")
+            console_log("Cookies successfully bypassed!", OK, silent_mode=SILENT_MODE)
+            time.sleep(
+                1
+            )  # Once pressed, you have to wait a little while. If code do not do this, the site does not count the acceptance of cookies
         else:
-            logging.info('Cookies were not bypassed (it doesn\'t affect the algorithm, I think :D)')
-            console_log("Cookies were not bypassed (it doesn't affect the algorithm, I think :D)", ERROR, silent_mode=SILENT_MODE)
+            logging.info(
+                "Cookies were not bypassed (it doesn't affect the algorithm, I think :D)"
+            )
+            console_log(
+                "Cookies were not bypassed (it doesn't affect the algorithm, I think :D)",
+                ERROR,
+                silent_mode=SILENT_MODE,
+            )
 
         exec_js(f"return {GET_EBID}('email')").send_keys(self.email_obj.email)
-        uCE(self.driver, f"return {CLICK_WITH_BOOL}({DEFINE_GET_EBAV_FUNCTION}('button', 'data-label', 'register-continue-button'))")
+        uCE(
+            self.driver,
+            f"return {CLICK_WITH_BOOL}({DEFINE_GET_EBAV_FUNCTION}('button', 'data-label', 'register-continue-button'))",
+        )
         time.sleep(1)
         try:
-            if exec_js(f"return {GET_EBAV}('div', 'data-label', 'register-email-formGroup-validation')") is not None:
-                raise RuntimeError(f'Email: {self.email_obj.email} is already registered!')
+            if (
+                exec_js(
+                    f"return {GET_EBAV}('div', 'data-label', 'register-email-formGroup-validation')"
+                )
+                is not None
+            ):
+                raise RuntimeError(
+                    f"Email: {self.email_obj.email} is already registered!"
+                )
         except:
             pass
-  
-        logging.info('[PASSWD] Register page loading...')
-        console_log('\n[PASSWD] Register page loading...', INFO, silent_mode=SILENT_MODE)
-        uCE(self.driver, f"return typeof {GET_EBAV}('button', 'data-label', 'register-create-account-button') === 'object'")
-        logging.info('[PASSWD] Register page is loaded!')
-        console_log('[PASSWD] Register page is loaded!', OK, silent_mode=SILENT_MODE)
+
+        logging.info("[PASSWD] Register page loading...")
+        console_log(
+            "\n[PASSWD] Register page loading...", INFO, silent_mode=SILENT_MODE
+        )
+        uCE(
+            self.driver,
+            f"return typeof {GET_EBAV}('button', 'data-label', 'register-create-account-button') === 'object'",
+        )
+        logging.info("[PASSWD] Register page is loaded!")
+        console_log("[PASSWD] Register page is loaded!", OK, silent_mode=SILENT_MODE)
         exec_js(f"return {GET_EBID}('password')").send_keys(self.eset_password)
-        
+
         # Select Ukraine country
-        logging.info('Selecting the country...')
-        if exec_js(f"return {GET_EBCN}('select__single-value css-1dimb5e-singleValue')[0]").text != 'Ukraine':
-            exec_js(f"return {GET_EBCN}('select__control css-13cymwt-control')[0]").click()
-            for country in exec_js(f"return {GET_EBCN}('select__option css-uhiml7-option')"):
-                if country.text == 'Ukraine':
+        logging.info("Selecting the country...")
+        if (
+            exec_js(
+                f"return {GET_EBCN}('select__single-value css-1dimb5e-singleValue')[0]"
+            ).text
+            != "Ukraine"
+        ):
+            exec_js(
+                f"return {GET_EBCN}('select__control css-13cymwt-control')[0]"
+            ).click()
+            for country in exec_js(
+                f"return {GET_EBCN}('select__option css-uhiml7-option')"
+            ):
+                if country.text == "Ukraine":
                     country.click()
-                    logging.info('Country selected!')
+                    logging.info("Country selected!")
                     break
 
-        uCE(self.driver, f"return {CLICK_WITH_BOOL}({DEFINE_GET_EBAV_FUNCTION}('button', 'data-label', 'register-create-account-button'))")
-        
+        uCE(
+            self.driver,
+            f"return {CLICK_WITH_BOOL}({DEFINE_GET_EBAV_FUNCTION}('button', 'data-label', 'register-create-account-button'))",
+        )
+
         for _ in range(DEFAULT_MAX_ITER):
-            title = exec_js('return document.title')
-            if title == 'Service not available':
-                raise IPBlockedException('\nESET temporarily blocked your IP, try again later!!! Try to use VPN/Proxy or try to change Email API!!!')
-            url = exec_js('return document.URL')
-            if url == 'https://home.eset.com/':
+            title = exec_js("return document.title")
+            if title == "Service not available":
+                raise IPBlockedException(
+                    "\nESET temporarily blocked your IP, try again later!!! Try to use VPN/Proxy or try to change Email API!!!"
+                )
+            url = exec_js("return document.URL")
+            if url == "https://home.eset.com/":
                 return True
             time.sleep(DEFAULT_DELAY)
-        raise IPBlockedException('\nESET temporarily blocked your IP, try again later!!! Try to use VPN/Proxy or try to change Email API!!!')
+        raise IPBlockedException(
+            "\nESET temporarily blocked your IP, try again later!!! Try to use VPN/Proxy or try to change Email API!!!"
+        )
 
     def confirmAccount(self):
         uCE = untilConditionExecute
-        #uCE(self.driver, f'return {CLICK_WITH_BOOL}({GET_EBAV}("ion-button", "data-r", "account-verification-email-modal-resend-email-btn"))') # accelerating the receipt of an eset token
-        
+        # uCE(self.driver, f'return {CLICK_WITH_BOOL}({GET_EBAV}("ion-button", "data-r", "account-verification-email-modal-resend-email-btn"))') # accelerating the receipt of an eset token
+
         if isinstance(self.email_obj, CustomEmailAPI):
             token = parseToken(self.email_obj, max_iter=100, delay=3)
         else:
-            logging.info(f'[{self.email_obj.class_name}] ESET-HOME-Token interception...')
-            console_log(f'\n[{self.email_obj.class_name}] ESET-HOME-Token interception...', INFO, silent_mode=SILENT_MODE)
+            logging.info(
+                f"[{self.email_obj.class_name}] ESET-HOME-Token interception..."
+            )
+            console_log(
+                f"\n[{self.email_obj.class_name}] ESET-HOME-Token interception...",
+                INFO,
+                silent_mode=SILENT_MODE,
+            )
             if isinstance(self.email_obj, WEB_WRAPPER_EMAIL_APIS_CLASSES):
                 token = parseToken(self.email_obj, self.driver, max_iter=100, delay=3)
                 self.driver.switch_to.window(self.window_handle)
             else:
-                token = parseToken(self.email_obj, max_iter=100, delay=3) # 1secmail, developermail
-        logging.info(f'ESET-HOME-Token: {token}')
-        logging.info('Account confirmation is in progress...')
-        console_log(f'ESET-HOME-Token: {token}', OK, silent_mode=SILENT_MODE)
-        console_log('\nAccount confirmation is in progress...', INFO, silent_mode=SILENT_MODE)
-        self.driver.get(f'https://login.eset.com/link/confirmregistration?token={token}')
+                token = parseToken(
+                    self.email_obj, max_iter=100, delay=3
+                )  # 1secmail, developermail
+        logging.info(f"ESET-HOME-Token: {token}")
+        logging.info("Account confirmation is in progress...")
+        console_log(f"ESET-HOME-Token: {token}", OK, silent_mode=SILENT_MODE)
+        console_log(
+            "\nAccount confirmation is in progress...", INFO, silent_mode=SILENT_MODE
+        )
+        self.driver.get(
+            f"https://login.eset.com/link/confirmregistration?token={token}"
+        )
         uCE(self.driver, 'return document.title.includes("ESET HOME")')
         try:
             uCE(self.driver, f'return {GET_EBCN}("verification-email_p").length === 0')
         except:
-            self.driver.get(f'https://login.eset.com/link/confirmregistration?token={token}')
+            self.driver.get(
+                f"https://login.eset.com/link/confirmregistration?token={token}"
+            )
             uCE(self.driver, 'return document.title.includes("ESET HOME")')
             uCE(self.driver, f'return {GET_EBCN}("verification-email_p").length === 0')
-        logging.info('Account successfully confirmed!')
-        console_log('Account successfully confirmed!', OK, silent_mode=SILENT_MODE)
+        logging.info("Account successfully confirmed!")
+        console_log("Account successfully confirmed!", OK, silent_mode=SILENT_MODE)
         return True
 
+
 class EsetKeygen(object):
-    def __init__(self, registered_email_obj: OneSecEmailAPI, driver: Chrome, mode='ESET HOME'):
+    def __init__(
+        self, registered_email_obj: OneSecEmailAPI, driver: Chrome, mode="ESET HOME"
+    ):
         self.email_obj = registered_email_obj
         self.driver = driver
         self.mode = mode.upper()
-        if self.mode not in ['ESET HOME', 'SMALL BUSINESS']:
-            raise RuntimeError('Undefined keygen mode!')
-        
+        if self.mode not in ["ESET HOME", "SMALL BUSINESS"]:
+            raise RuntimeError("Undefined keygen mode!")
+
     def sendRequestForKey(self):
         uCE = untilConditionExecute
 
-        logging.info(f'[{self.mode}] Request sending...')
-        console_log(f'\n[{self.mode}] Request sending...', INFO, silent_mode=SILENT_MODE)
-        
+        logging.info(f"[{self.mode}] Request sending...")
+        console_log(
+            f"\n[{self.mode}] Request sending...", INFO, silent_mode=SILENT_MODE
+        )
+
         # After account confirmation, we should already be logged in
         # Check current URL first before navigating
         current_url_after_confirm = self.driver.current_url.lower()
-        logging.info(f'URL after account confirmation: {self.driver.current_url}')
-        
+        logging.info(f"URL after account confirmation: {self.driver.current_url}")
+
         # If we're already on home.eset.com, great! If not, navigate there
-        if 'home.eset.com' not in current_url_after_confirm:
-            logging.info('Not on home.eset.com, navigating there...')
-            self.driver.get('https://home.eset.com/')
+        if "home.eset.com" not in current_url_after_confirm:
+            logging.info("Not on home.eset.com, navigating there...")
+            self.driver.get("https://home.eset.com/")
             time.sleep(3)  # Initial wait
         else:
-            logging.info('Already on home.eset.com after confirmation')
+            logging.info("Already on home.eset.com after confirmation")
             time.sleep(2)  # Still wait a bit
-        
+
         # Wait for the React app to fully load (check for meaningful content)
-        logging.info('Waiting for page to fully load...')
+        logging.info("Waiting for page to fully load...")
         page_loaded = False
         for i in range(15):  # Try for up to 30 seconds
             time.sleep(2)
             # Check if page has loaded by looking for actual content
-            has_content = self.driver.execute_script("""
+            has_content = self.driver.execute_script(
+                """
                 var root = document.getElementById('root');
                 if (!root) return false;
                 // Check if there's actual content, not just loading divs
                 var content = root.innerText.trim();
                 return content.length > 50;  // Should have some text if loaded
-            """)
+            """
+            )
             if has_content:
-                logging.info('Page content loaded')
+                logging.info("Page content loaded")
                 page_loaded = True
                 break
-            logging.info(f'Waiting for page content... ({i+1}/15)')
-        
+            logging.info(f"Waiting for page content... ({i+1}/15)")
+
         if not page_loaded:
-            logging.warning('Page may not have fully loaded, continuing anyway...')
-        
+            logging.warning("Page may not have fully loaded, continuing anyway...")
+
         current_url = self.driver.current_url.lower()
-        logging.info(f'Current URL before onboarding check: {self.driver.current_url}')
-        
+        logging.info(f"Current URL before onboarding check: {self.driver.current_url}")
+
         # Check if redirected to login (session expired)
-        if 'login' in current_url:
-            raise RuntimeError('Session expired or not logged in! Please ensure account is confirmed.')
-        
+        if "login" in current_url:
+            raise RuntimeError(
+                "Session expired or not logged in! Please ensure account is confirmed."
+            )
+
         # Check if we're on the onboarding page
-        if 'onboarding' in current_url:
-            logging.info('Detected onboarding page, attempting bypass...')
-            console_log('\nDetected onboarding page, attempting bypass...', INFO, silent_mode=SILENT_MODE)
-            
+        if "onboarding" in current_url:
+            logging.info("Detected onboarding page, attempting bypass...")
+            console_log(
+                "\nDetected onboarding page, attempting bypass...",
+                INFO,
+                silent_mode=SILENT_MODE,
+            )
+
             # Strategy: Complete the onboarding flow properly
-            logging.warning('Onboarding is mandatory, completing flow...')
-            console_log('Onboarding is mandatory, completing flow...', INFO, silent_mode=SILENT_MODE)
-            
+            logging.warning("Onboarding is mandatory, completing flow...")
+            console_log(
+                "Onboarding is mandatory, completing flow...",
+                INFO,
+                silent_mode=SILENT_MODE,
+            )
+
             # Try using JavaScript to complete the onboarding
             try:
                 max_attempts = 20  # Increased for all onboarding steps
                 for step in range(max_attempts):
                     time.sleep(2)  # Wait for page to stabilize
-                    
+
                     current_url = self.driver.current_url.lower()
-                    logging.info(f'Onboarding step {step+1}/{max_attempts}, URL: {self.driver.current_url}')
-                    
+                    logging.info(
+                        f"Onboarding step {step+1}/{max_attempts}, URL: {self.driver.current_url}"
+                    )
+
                     # Check if we've left onboarding
-                    if 'onboarding' not in current_url:
-                        logging.info('Successfully left onboarding!')
-                        console_log('Onboarding completed!', OK, silent_mode=SILENT_MODE)
+                    if "onboarding" not in current_url:
+                        logging.info("Successfully left onboarding!")
+                        console_log(
+                            "Onboarding completed!", OK, silent_mode=SILENT_MODE
+                        )
                         break
-                    
+
                     # Strategy: Handle different onboarding screens in order
                     action_taken = False
-                    
+
                     # Step 1: Skip introduction on welcome page
-                    skip_intro = self.driver.execute_script("""
+                    skip_intro = self.driver.execute_script(
+                        """
                         var skipBtn = document.querySelector('button');
                         if (skipBtn && skipBtn.innerText.toLowerCase().includes('skip introduction')) {
                             skipBtn.click();
                             return true;
                         }
                         return false;
-                    """)
+                    """
+                    )
                     if skip_intro:
-                        logging.info('Clicked Skip Introduction')
+                        logging.info("Clicked Skip Introduction")
                         action_taken = True
                         time.sleep(2)
                         continue
-                    
+
                     # Step 2a: Select "Start a 30-day trial" option (more aggressive)
                     trial_selected = False
                     try:
-                        trial_selected = self.driver.execute_script("""
+                        trial_selected = self.driver.execute_script(
+                            """
                             (function(){
                                 var debug = { success: false, inputChecked: false, buttons: [] };
                                 var trialLabel = document.querySelector('label[data-label="onboarding-add-subscription-protect-card-trial"]');
@@ -360,11 +539,14 @@ class EsetKeygen(object):
 
                                 return debug;
                             })();
-                        """)
+                        """
+                        )
                         # trial_selected will be a dict-like object from JS; convert to truthy
                         if isinstance(trial_selected, dict):
                             logging.info(f"Trial JS result: {trial_selected}")
-                            action_taken = trial_selected.get('success', False) or trial_selected.get('inputChecked', False)
+                            action_taken = trial_selected.get(
+                                "success", False
+                            ) or trial_selected.get("inputChecked", False)
                             if action_taken:
                                 trial_selected = True
                             else:
@@ -372,30 +554,39 @@ class EsetKeygen(object):
                         else:
                             trial_selected = bool(trial_selected)
                     except Exception as E:
-                        logging.debug(f'Trial selection JS error: {E}')
+                        logging.debug(f"Trial selection JS error: {E}")
                         trial_selected = False
 
                     if trial_selected:
-                        logging.info('Selected trial option (aggressive)')
+                        logging.info("Selected trial option (aggressive)")
                         action_taken = True
                         time.sleep(1)
                     else:
                         # Save additional state to help CI debugging
                         if generate_debug_artifacts_enabled():
                             try:
-                                state = self.driver.execute_script("return (function(){ var res = {}; res.bodyText = document.body.innerText.slice(0,2000); res.buttons = Array.from(document.querySelectorAll('button')).map(b=>({text:(b.innerText||'').trim(), disabled:!!b.disabled, ariaDisabled:b.getAttribute('aria-disabled')})); res.radios = Array.from(document.querySelectorAll('input[type=radio]')).map(r=>({id:r.id, name:r.name, checked:!!r.checked})); return res; })();")
-                                with open('debug_onboarding_state.json','w',encoding='utf-8') as f:
+                                state = self.driver.execute_script(
+                                    "return (function(){ var res = {}; res.bodyText = document.body.innerText.slice(0,2000); res.buttons = Array.from(document.querySelectorAll('button')).map(b=>({text:(b.innerText||'').trim(), disabled:!!b.disabled, ariaDisabled:b.getAttribute('aria-disabled')})); res.radios = Array.from(document.querySelectorAll('input[type=radio]')).map(r=>({id:r.id, name:r.name, checked:!!r.checked})); return res; })();"
+                                )
+                                with open(
+                                    "debug_onboarding_state.json", "w", encoding="utf-8"
+                                ) as f:
                                     import json
-                                    json.dump(state, f, indent=2)
-                                logging.info('Saved debug_onboarding_state.json')
-                            except Exception as e:
-                                logging.warning(f'Could not save debug_onboarding_state.json: {e}')
-                        else:
-                            logging.debug('Skipping debug_onboarding_state.json write (disabled by env)')
 
-                    
+                                    json.dump(state, f, indent=2)
+                                logging.info("Saved debug_onboarding_state.json")
+                            except Exception as e:
+                                logging.warning(
+                                    f"Could not save debug_onboarding_state.json: {e}"
+                                )
+                        else:
+                            logging.debug(
+                                "Skipping debug_onboarding_state.json write (disabled by env)"
+                            )
+
                     # Step 2b: Select "Protect your home" option (if present)
-                    home_selected = self.driver.execute_script("""
+                    home_selected = self.driver.execute_script(
+                        """
                         // Look for "Protect your home" option
                         var labels = document.querySelectorAll('label[tabindex="0"]');
                         for (var i = 0; i < labels.length; i++) {
@@ -409,53 +600,71 @@ class EsetKeygen(object):
                             }
                         }
                         return false;
-                    """)
+                    """
+                    )
                     if home_selected:
-                        logging.info('Selected Protect your home option')
+                        logging.info("Selected Protect your home option")
                         action_taken = True
                         time.sleep(1)
-                    
+
                     # Step 3a: Fill in member name (if input field is present) and submit form
                     try:
-                        name_input = self.driver.find_element('css selector', 'input[name="name"]')
-                        if name_input and name_input.get_attribute('value').strip() == '':
+                        name_input = self.driver.find_element(
+                            "css selector", 'input[name="name"]'
+                        )
+                        if (
+                            name_input
+                            and name_input.get_attribute("value").strip() == ""
+                        ):
                             random_name = generate_random_name()
-                            logging.info(f'Found empty name field, filling with: {random_name}')
+                            logging.info(
+                                f"Found empty name field, filling with: {random_name}"
+                            )
                             name_input.click()  # Focus the field
                             time.sleep(0.1)
-                            name_input.send_keys(random_name)  # Selenium's send_keys triggers all keyboard events
+                            name_input.send_keys(
+                                random_name
+                            )  # Selenium's send_keys triggers all keyboard events
                             time.sleep(0.5)
-                            
+
                             # Dispatch change and blur events
-                            self.driver.execute_script("""
+                            self.driver.execute_script(
+                                """
                                 var nameInput = arguments[0];
                                 nameInput.dispatchEvent(new Event('change', { bubbles: true }));
                                 nameInput.dispatchEvent(new Event('blur', { bubbles: true }));
-                            """, name_input)
-                            
-                            logging.info('Filled member name, waiting for Continue button to enable')
+                            """,
+                                name_input,
+                            )
+
+                            logging.info(
+                                "Filled member name, waiting for Continue button to enable"
+                            )
                             time.sleep(1)
-                            
+
                             # Try to click continue button
-                            continue_clicked = self.driver.execute_script("""
+                            continue_clicked = self.driver.execute_script(
+                                """
                                 var continueBtn = document.querySelector('button[data-label="onboarding-members-continue-btn"]');
                                 if (continueBtn && !continueBtn.disabled) {
                                     continueBtn.click();
                                     return true;
                                 }
                                 return false;
-                            """)
-                            
+                            """
+                            )
+
                             if continue_clicked:
-                                logging.info('Clicked Continue button after name fill')
+                                logging.info("Clicked Continue button after name fill")
                                 action_taken = True
                                 time.sleep(2)
                                 continue
                     except:
                         pass
-                    
+
                     # Step 3b: Select "Just me" option (if present)
-                    just_me_selected = self.driver.execute_script("""
+                    just_me_selected = self.driver.execute_script(
+                        """
                         var justMeLabel = document.querySelector('label[data-label="onboarding-members-me-option"]');
                         if (justMeLabel) {
                             var input = justMeLabel.querySelector('input');
@@ -465,14 +674,16 @@ class EsetKeygen(object):
                             }
                         }
                         return false;
-                    """)
+                    """
+                    )
                     if just_me_selected:
-                        logging.info('Selected Just me option')
+                        logging.info("Selected Just me option")
                         action_taken = True
                         time.sleep(1)
-                    
+
                     # Step 4: Click "Finish for now" button (final step)
-                    finish_clicked = self.driver.execute_script("""
+                    finish_clicked = self.driver.execute_script(
+                        """
                         var buttons = document.querySelectorAll('button');
                         for (var i = 0; i < buttons.length; i++) {
                             var btn = buttons[i];
@@ -483,15 +694,17 @@ class EsetKeygen(object):
                             }
                         }
                         return false;
-                    """)
+                    """
+                    )
                     if finish_clicked:
-                        logging.info('Clicked Finish for now')
+                        logging.info("Clicked Finish for now")
                         action_taken = True
                         time.sleep(3)
                         continue
-                    
+
                     # Generic: Try to click any enabled Continue button
-                    continue_clicked = self.driver.execute_script("""
+                    continue_clicked = self.driver.execute_script(
+                        """
                         // Look for Continue buttons
                         var buttons = document.querySelectorAll('button:not([disabled])');
                         for (var i = 0; i < buttons.length; i++) {
@@ -505,87 +718,114 @@ class EsetKeygen(object):
                             }
                         }
                         return false;
-                    """)
-                    
+                    """
+                    )
+
                     if continue_clicked:
-                        logging.info('Clicked Continue button')
+                        logging.info("Clicked Continue button")
                         action_taken = True
                         time.sleep(2)
-                    
+
                     # If no action was taken, we might be stuck
                     if not action_taken:
-                        logging.warning(f'No actionable element found on current onboarding page')
+                        logging.warning(
+                            f"No actionable element found on current onboarding page"
+                        )
                         time.sleep(1)
-                
+
                 # After completing onboarding steps, give it time to settle
                 time.sleep(3)
-                
+
             except Exception as e:
-                logging.warning(f'Error during onboarding: {e}')
-            
+                logging.warning(f"Error during onboarding: {e}")
+
             # Final check - if still on onboarding, raise error
-            if 'onboarding' in self.driver.current_url.lower():
-                logging.error(f'Still on onboarding after all attempts. URL: {self.driver.current_url}')
+            if "onboarding" in self.driver.current_url.lower():
+                logging.error(
+                    f"Still on onboarding after all attempts. URL: {self.driver.current_url}"
+                )
                 if generate_debug_artifacts_enabled():
                     # Save debug info
                     try:
-                        with open('debug_onboarding_stuck.html', 'w', encoding='utf-8') as f:
+                        with open(
+                            "debug_onboarding_stuck.html", "w", encoding="utf-8"
+                        ) as f:
                             f.write(self.driver.page_source)
-                        self.driver.save_screenshot('debug_onboarding_stuck.png')
-                        logging.info('Saved debug_onboarding_stuck.*')
+                        self.driver.save_screenshot("debug_onboarding_stuck.png")
+                        logging.info("Saved debug_onboarding_stuck.*")
                     except Exception as e:
-                        logging.warning(f'Could not save debug_onboarding_stuck files: {e}')
+                        logging.warning(
+                            f"Could not save debug_onboarding_stuck files: {e}"
+                        )
                     # Also attempt to capture the UI state (buttons, radios, small page text) for CI inspection
                     try:
-                        state = self.driver.execute_script("return (function(){ var res={}; res.bodyText = document.body.innerText.slice(0,4000); res.buttons = Array.from(document.querySelectorAll('button')).map(b=>({text:(b.innerText||'').trim(), disabled:!!b.disabled, ariaDisabled:b.getAttribute('aria-disabled')})); res.radios = Array.from(document.querySelectorAll('input[type=radio]')).map(r=>({id:r.id, name:r.name, checked:!!r.checked})); return res; })();")
+                        state = self.driver.execute_script(
+                            "return (function(){ var res={}; res.bodyText = document.body.innerText.slice(0,4000); res.buttons = Array.from(document.querySelectorAll('button')).map(b=>({text:(b.innerText||'').trim(), disabled:!!b.disabled, ariaDisabled:b.getAttribute('aria-disabled')})); res.radios = Array.from(document.querySelectorAll('input[type=radio]')).map(r=>({id:r.id, name:r.name, checked:!!r.checked})); return res; })();"
+                        )
                         import json
-                        with open('debug_onboarding_state.json','w',encoding='utf-8') as f:
+
+                        with open(
+                            "debug_onboarding_state.json", "w", encoding="utf-8"
+                        ) as f:
                             json.dump(state, f, indent=2)
-                        logging.info('Saved debug_onboarding_state.json')
+                        logging.info("Saved debug_onboarding_state.json")
                     except Exception as E:
-                        logging.warning(f'Could not save debug_onboarding_state.json: {E}')
+                        logging.warning(
+                            f"Could not save debug_onboarding_state.json: {E}"
+                        )
                 else:
-                    logging.debug('Skipping onboarding debug artifact writes (disabled by env)')
-                raise RuntimeError('Cannot bypass onboarding - ESET enforces mandatory onboarding flow')
-        
+                    logging.debug(
+                        "Skipping onboarding debug artifact writes (disabled by env)"
+                    )
+                raise RuntimeError(
+                    "Cannot bypass onboarding - ESET enforces mandatory onboarding flow"
+                )
+
         # After onboarding is complete, the trial subscription is already activated
         # Navigate to subscriptions page to extract the license key
-        logging.info('Onboarding complete! Now navigating to subscriptions to retrieve license key...')
+        logging.info(
+            "Onboarding complete! Now navigating to subscriptions to retrieve license key..."
+        )
         time.sleep(2)
-        
+
         # Navigate to subscriptions page
-        self.driver.get('https://home.eset.com/subscriptions')
+        self.driver.get("https://home.eset.com/subscriptions")
         time.sleep(5)  # Wait for page load
-        
-        logging.info(f'Current URL: {self.driver.current_url}')
-        
+
+        logging.info(f"Current URL: {self.driver.current_url}")
+
         # Check if redirected to login
-        if 'login' in self.driver.current_url.lower():
-            logging.error(f'Redirected to login page. URL: {self.driver.current_url}')
-            raise RuntimeError('Session expired - redirected to login!')
-        
+        if "login" in self.driver.current_url.lower():
+            logging.error(f"Redirected to login page. URL: {self.driver.current_url}")
+            raise RuntimeError("Session expired - redirected to login!")
+
         # Wait for subscriptions page to load and find the subscription card
-        logging.info('Looking for subscription card...')
+        logging.info("Looking for subscription card...")
         subscription_found = False
         for attempt in range(10):
-            subscription_text = self.driver.execute_script("""
+            subscription_text = self.driver.execute_script(
+                """
                 var text = document.body.innerText.toLowerCase();
                 return text.includes('subscription') || text.includes('eset');
-            """)
+            """
+            )
             if subscription_text:
                 subscription_found = True
-                logging.info('Subscription content found on page')
+                logging.info("Subscription content found on page")
                 break
             time.sleep(1)
-        
+
         if not subscription_found:
-            logging.warning('Could not verify subscription content, continuing anyway...')
-        
+            logging.warning(
+                "Could not verify subscription content, continuing anyway..."
+            )
+
         # Click the "Open subscription" button
         logging.info('Looking for "Open subscription" button...')
         open_subscription_clicked = False
         for attempt in range(10):
-            button_clicked = self.driver.execute_script("""
+            button_clicked = self.driver.execute_script(
+                """
                 var buttons = document.querySelectorAll('button');
                 for (var i = 0; i < buttons.length; i++) {
                     var btn_text = buttons[i].innerText.toLowerCase().trim();
@@ -595,31 +835,41 @@ class EsetKeygen(object):
                     }
                 }
                 return false;
-            """)
+            """
+            )
             if button_clicked:
                 open_subscription_clicked = True
                 logging.info('Successfully clicked "Open subscription" button')
                 time.sleep(3)  # Wait for subscription detail page to load
                 break
             time.sleep(1)
-        
+
         if not open_subscription_clicked:
             logging.error('Could not find or click "Open subscription" button')
             if generate_debug_artifacts_enabled():
                 try:
-                    with open('debug_subscriptions_page.html', 'w', encoding='utf-8') as f:
+                    with open(
+                        "debug_subscriptions_page.html", "w", encoding="utf-8"
+                    ) as f:
                         f.write(self.driver.page_source)
-                    self.driver.save_screenshot('debug_subscriptions_page.png')
-                    logging.info('Saved debug_subscriptions_page.html and debug_subscriptions_page.png')
+                    self.driver.save_screenshot("debug_subscriptions_page.png")
+                    logging.info(
+                        "Saved debug_subscriptions_page.html and debug_subscriptions_page.png"
+                    )
                 except Exception as e:
-                    logging.warning(f'Could not write debug_subscriptions_page files: {e}')
+                    logging.warning(
+                        f"Could not write debug_subscriptions_page files: {e}"
+                    )
             else:
-                logging.debug('Skipping debug_subscriptions_page writes (disabled by env)')
-            raise RuntimeError('Could not access subscription details!')
-        
+                logging.debug(
+                    "Skipping debug_subscriptions_page writes (disabled by env)"
+                )
+            raise RuntimeError("Could not access subscription details!")
+
         # Extract the license key and expiration date from the subscription detail page
-        logging.info('Extracting license key and expiration date...')
-        license_info = self.driver.execute_script("""
+        logging.info("Extracting license key and expiration date...")
+        license_info = self.driver.execute_script(
+            """
             var result = {
                 activation_key: null,
                 expiration_date: null,
@@ -650,226 +900,222 @@ class EsetKeygen(object):
             }
 
             return result;
-        """)
-        
-        if license_info['activation_key']:
+        """
+        )
+
+        if license_info["activation_key"]:
             logging.info(f'[{self.mode}] License key: {license_info["activation_key"]}')
-            logging.info(f'[{self.mode}] Expiration date: {license_info["expiration_date"]}')
-            console_log(f'\n[{self.mode}] Request successfully sent!', OK, silent_mode=SILENT_MODE)
+            logging.info(
+                f'[{self.mode}] Expiration date: {license_info["expiration_date"]}'
+            )
+            console_log(
+                f"\n[{self.mode}] Request successfully sent!",
+                OK,
+                silent_mode=SILENT_MODE,
+            )
         else:
-            logging.error('Could not extract license key from subscription page')
-            logging.info(f'license_info: {license_info}')
-            logging.info(f'Page content preview: {self.driver.find_element("tag name", "body").text[:500]}')
+            logging.error("Could not extract license key from subscription page")
+            logging.info(f"license_info: {license_info}")
+            logging.info(
+                f'Page content preview: {self.driver.find_element("tag name", "body").text[:500]}'
+            )
             if generate_debug_artifacts_enabled():
                 try:
-                    with open('debug_subscription_detail.html', 'w', encoding='utf-8') as f:
+                    with open(
+                        "debug_subscription_detail.html", "w", encoding="utf-8"
+                    ) as f:
                         f.write(self.driver.page_source)
-                    self.driver.save_screenshot('debug_subscription_detail.png')
-                    logging.info('Saved debug_subscription_detail.html and debug_subscription_detail.png')
+                    self.driver.save_screenshot("debug_subscription_detail.png")
+                    logging.info(
+                        "Saved debug_subscription_detail.html and debug_subscription_detail.png"
+                    )
                     # Also save text content (body text)
-                    with open('debug_subscription_detail.txt', 'w', encoding='utf-8') as f:
+                    with open(
+                        "debug_subscription_detail.txt", "w", encoding="utf-8"
+                    ) as f:
                         f.write(self.driver.find_element("tag name", "body").text)
-                    logging.info('Saved debug_subscription_detail.txt with page text')
+                    logging.info("Saved debug_subscription_detail.txt with page text")
 
                     # Additionally capture the full page text via JS (document.documentElement.innerText)
                     try:
-                        full_text = self.driver.execute_script("return document.documentElement.innerText") or ''
-                        with open('debug_subscription_full_text.txt', 'w', encoding='utf-8') as f:
+                        full_text = (
+                            self.driver.execute_script(
+                                "return document.documentElement.innerText"
+                            )
+                            or ""
+                        )
+                        with open(
+                            "debug_subscription_full_text.txt", "w", encoding="utf-8"
+                        ) as f:
                             f.write(full_text)
-                        logging.info('Saved debug_subscription_full_text.txt with full page text')
+                        logging.info(
+                            "Saved debug_subscription_full_text.txt with full page text"
+                        )
                     except Exception as e:
-                        logging.warning(f'Could not capture full page text via JS: {e}')
+                        logging.warning(f"Could not capture full page text via JS: {e}")
                 except Exception as e:
-                    logging.warning(f'Could not write subscription debug files: {e}')
+                    logging.warning(f"Could not write subscription debug files: {e}")
             else:
-                logging.debug('Skipping subscription debug artifact writes (disabled by env)')
-            raise RuntimeError('Failed to extract license key from subscription details!')
+                logging.debug(
+                    "Skipping subscription debug artifact writes (disabled by env)"
+                )
+            raise RuntimeError(
+                "Failed to extract license key from subscription details!"
+            )
 
     def getLD(self):
         exec_js = self.driver.execute_script
         uCE = untilConditionExecute
-        logging.info(f'License uploads...')
-        console_log('\nLicense uploads...', INFO, silent_mode=SILENT_MODE)
-        uCE(self.driver, f"return {GET_EBAV}('div', 'data-label', 'license-detail-info') != null", raise_exception_if_failed=False)
-        if self.driver.current_url.find('detail') != -1:
-            logging.info(f'License ID: {self.driver.current_url[-11:]}')
-            console_log(f'License ID: {self.driver.current_url[-11:]}', OK, silent_mode=SILENT_MODE)
-        uCE(self.driver, f"return {GET_EBAV}('div', 'data-label', 'license-detail-product-name') != null", max_iter=10)
-        uCE(self.driver, f"return {GET_EBAV}('div', 'data-label', 'license-detail-license-model-additional-info') != null", max_iter=10)
-        uCE(self.driver, f"return {GET_EBAV}('div', 'data-label', 'license-detail-license-key') != null", max_iter=10)
-        license_name = exec_js(f"return {GET_EBAV}('div', 'data-label', 'license-detail-product-name').innerText")
-        license_out_date = exec_js(f"return {GET_EBAV}('div', 'data-label', 'license-detail-license-model-additional-info').innerText")
-        license_key = exec_js(f"return {GET_EBAV}('div', 'data-label', 'license-detail-license-key').innerText")
-        logging.info('Information successfully received!')
-        console_log('Information successfully received!', OK, silent_mode=SILENT_MODE)
+        logging.info(f"License uploads...")
+        console_log("\nLicense uploads...", INFO, silent_mode=SILENT_MODE)
+        uCE(
+            self.driver,
+            f"return {GET_EBAV}('div', 'data-label', 'license-detail-info') != null",
+            raise_exception_if_failed=False,
+        )
+        if self.driver.current_url.find("detail") != -1:
+            logging.info(f"License ID: {self.driver.current_url[-11:]}")
+            console_log(
+                f"License ID: {self.driver.current_url[-11:]}",
+                OK,
+                silent_mode=SILENT_MODE,
+            )
+        uCE(
+            self.driver,
+            f"return {GET_EBAV}('div', 'data-label', 'license-detail-product-name') != null",
+            max_iter=10,
+        )
+        uCE(
+            self.driver,
+            f"return {GET_EBAV}('div', 'data-label', 'license-detail-license-model-additional-info') != null",
+            max_iter=10,
+        )
+        uCE(
+            self.driver,
+            f"return {GET_EBAV}('div', 'data-label', 'license-detail-license-key') != null",
+            max_iter=10,
+        )
+        license_name = exec_js(
+            f"return {GET_EBAV}('div', 'data-label', 'license-detail-product-name').innerText"
+        )
+        license_out_date = exec_js(
+            f"return {GET_EBAV}('div', 'data-label', 'license-detail-license-model-additional-info').innerText"
+        )
+        license_key = exec_js(
+            f"return {GET_EBAV}('div', 'data-label', 'license-detail-license-key').innerText"
+        )
+        logging.info("Information successfully received!")
+        console_log("Information successfully received!", OK, silent_mode=SILENT_MODE)
         return license_name, license_key, license_out_date
 
+
 class EsetVPN(object):
-    def __init__(self, registered_email_obj: OneSecEmailAPI, driver: Chrome, EsetRegister_window_handle=None):
+    def __init__(
+        self,
+        registered_email_obj: OneSecEmailAPI,
+        driver: Chrome,
+        EsetRegister_window_handle=None,
+    ):
         self.email_obj = registered_email_obj
         self.driver = driver
         self.window_handle = EsetRegister_window_handle
-        
+
     def sendRequestForVPNCodes(self):
         exec_js = self.driver.execute_script
         uCE = untilConditionExecute
-        
-        logging.info('Sending a request for VPN subscriptions...')
-        console_log('\nSending a request for VPN subscriptions...', INFO, silent_mode=SILENT_MODE)
+
+        logging.info("Sending a request for VPN subscriptions...")
+        console_log(
+            "\nSending a request for VPN subscriptions...",
+            INFO,
+            silent_mode=SILENT_MODE,
+        )
         self.driver.get("https://home.eset.com/security-features")
         try:
-            uCE(self.driver, f'return {CLICK_WITH_BOOL}({GET_EBAV}("button", "data-label", "security-feature-explore-button"))', max_iter=10)
+            uCE(
+                self.driver,
+                f'return {CLICK_WITH_BOOL}({GET_EBAV}("button", "data-label", "security-feature-explore-button"))',
+                max_iter=10,
+            )
         except:
-            raise RuntimeError('Explore-feature-button error!')
+            raise RuntimeError("Explore-feature-button error!")
         time.sleep(0.5)
-        for profile in exec_js(f'return {GET_EBAV}("button", "data-label", "choose-profile-tile-button", -1)'): # choose Me profile
-            if profile.get_attribute("innerText").find(self.email_obj.email) != -1: # Me profile contains an email address
+        for profile in exec_js(
+            f'return {GET_EBAV}("button", "data-label", "choose-profile-tile-button", -1)'
+        ):  # choose Me profile
+            if (
+                profile.get_attribute("innerText").find(self.email_obj.email) != -1
+            ):  # Me profile contains an email address
                 profile.click()
-        uCE(self.driver, f'return {CLICK_WITH_BOOL}({GET_EBAV}("button", "data-label", "choose-profile-continue-btn"))', max_iter=5)
-        uCE(self.driver, f'return {GET_EBAV}("button", "data-label", "choose-device-counter-increment-button") != null', max_iter=10)
-        for _ in range(9): # increasing 'Number of devices' (to 10)
-            exec_js(f'{GET_EBAV}("button", "data-label", "choose-device-counter-increment-button").click()')
-        exec_js(f'{GET_EBAV}("button", "data-label", "choose-device-count-submit-button").click()')
-        uCE(self.driver, f'return {GET_EBAV}("button", "data-label", "pwm-instructions-sent-download-button") != null', max_iter=15)
-        logging.info('Request successfully sent!')
-        console_log('Request successfully sent!', OK, silent_mode=SILENT_MODE)
+        uCE(
+            self.driver,
+            f'return {CLICK_WITH_BOOL}({GET_EBAV}("button", "data-label", "choose-profile-continue-btn"))',
+            max_iter=5,
+        )
+        uCE(
+            self.driver,
+            f'return {GET_EBAV}("button", "data-label", "choose-device-counter-increment-button") != null',
+            max_iter=10,
+        )
+        for _ in range(9):  # increasing 'Number of devices' (to 10)
+            exec_js(
+                f'{GET_EBAV}("button", "data-label", "choose-device-counter-increment-button").click()'
+            )
+        exec_js(
+            f'{GET_EBAV}("button", "data-label", "choose-device-count-submit-button").click()'
+        )
+        uCE(
+            self.driver,
+            f'return {GET_EBAV}("button", "data-label", "pwm-instructions-sent-download-button") != null',
+            max_iter=15,
+        )
+        logging.info("Request successfully sent!")
+        console_log("Request successfully sent!", OK, silent_mode=SILENT_MODE)
         return True
-    
+
     def getVPNCodes(self):
         if isinstance(self.email_obj, CustomEmailAPI):
-            logging.warning('Wait for a message to your e-mail about instructions on how to set up the VPN!!!')
-            console_log('\nWait for a message to your e-mail about instructions on how to set up the VPN!!!', WARN, True, SILENT_MODE)
+            logging.warning(
+                "Wait for a message to your e-mail about instructions on how to set up the VPN!!!"
+            )
+            console_log(
+                "\nWait for a message to your e-mail about instructions on how to set up the VPN!!!",
+                WARN,
+                True,
+                SILENT_MODE,
+            )
             return None
         else:
-            logging.info(f'[{self.email_obj.class_name}] VPN Codes interception...')
-            console_log(f'\n[{self.email_obj.class_name}] VPN Codes interception...', INFO, silent_mode=SILENT_MODE) # timeout 1.5m
+            logging.info(f"[{self.email_obj.class_name}] VPN Codes interception...")
+            console_log(
+                f"\n[{self.email_obj.class_name}] VPN Codes interception...",
+                INFO,
+                silent_mode=SILENT_MODE,
+            )  # timeout 1.5m
             if isinstance(self.email_obj, WEB_WRAPPER_EMAIL_APIS_CLASSES):
-                vpn_codes = parseVPNCodes(self.email_obj, self.driver, delay=2, max_iter=45)
+                vpn_codes = parseVPNCodes(
+                    self.email_obj, self.driver, delay=2, max_iter=45
+                )
                 self.driver.switch_to.window(self.window_handle)
             else:
-                vpn_codes = parseVPNCodes(self.email_obj, self.driver, delay=2, max_iter=45) # 1secmail, developermail
-                logging.info('Information successfully received!')
-                console_log('Information successfully received!', OK, silent_mode=SILENT_MODE)
+                vpn_codes = parseVPNCodes(
+                    self.email_obj, self.driver, delay=2, max_iter=45
+                )  # 1secmail, developermail
+                logging.info("Information successfully received!")
+                console_log(
+                    "Information successfully received!", OK, silent_mode=SILENT_MODE
+                )
         return vpn_codes
 
+
 class EsetProtectHubRegister(object):
-    def __init__(self, registered_email_obj: OneSecEmailAPI, eset_password: str, driver: Chrome):
+    def __init__(
+        self, registered_email_obj: OneSecEmailAPI, eset_password: str, driver: Chrome
+    ):
         self.email_obj = registered_email_obj
         self.driver = driver
         self.eset_password = eset_password
         self.window_handle = None
-
-    def solve_mtcaptcha_simple_ocr(self):
-        """
-        Simple OCR method without OpenCV - works on Windows
-        """
-        try:
-            print("[  INFO  ] Attempting OCR captcha solving...")
-
-            if not OCR_AVAILABLE:
-                print('[  WARN  ] pytesseract or Pillow are not installed. Install with: pip install pytesseract Pillow and ensure Tesseract executable is available.')
-                return False
-
-            if not ensure_tesseract_path():
-                print('[  WARN  ] Tesseract executable not found. Install Tesseract OCR and ensure the path is correct (or set pytesseract.pytesseract.tesseract_cmd).')
-                return False
-
-            try:
-                print('Tesseract path:', pytesseract.pytesseract.tesseract_cmd)
-                print('Tesseract version:', pytesseract.get_tesseract_version())
-                print('OCR is ready!')
-            except Exception as e:
-                print('[  WARN  ] Tesseract check failed:', e)
-                return False
-
-            # Switch to iframe
-            iframe = self.driver.find_element(By.ID, "register-captcha-iframe-1")
-            self.driver.switch_to.frame(iframe)
-            time.sleep(2)
-
-            # Get captcha image
-            captcha_img = self.driver.find_element(By.ID, "mtcap-image-1")
-
-            # Extract base64 from style attribute
-            style = captcha_img.get_attribute("style")
-            if "base64," in style:
-                base64_match = re.search(r'base64,([^"\']+)', style)
-                if base64_match:
-                    base64_data = base64_match.group(1)
-                    captcha_text = self._simple_ocr_process(base64_data)
-
-                    if captcha_text and 4 <= len(captcha_text) <= 8:
-                        input_field = self.driver.find_element(By.ID, "mtcap-inputtext-1")
-                        input_field.clear()
-
-                        # Type slowly like a human
-                        for char in captcha_text:
-                            input_field.send_keys(char)
-                            time.sleep(0.1)
-
-                        time.sleep(1)
-
-                        # Click verify button
-                        verify_btn = self.driver.find_element(By.ID, "mtcap-statusbutton-1")
-                        verify_btn.click()
-
-                        time.sleep(2)
-
-                        # Check if successful
-                        try:
-                            status_elem = self.driver.find_element(By.ID, "mtcap-status-1")
-                            if "success" in status_elem.get_attribute("class").lower():
-                                self.driver.switch_to.default_content()
-                                print(f"[   OK   ] OCR solved: {captcha_text}")
-                                return True
-                        except:
-                            pass
-
-            self.driver.switch_to.default_content()
-            print("[  WARN  ] OCR failed")
-            return False
-
-        except Exception as e:
-            try:
-                self.driver.switch_to.default_content()
-            except:
-                pass
-            print(f"[  WARN  ] OCR error: {str(e)}")
-            return False
-    
-
-    def _simple_ocr_process(self, base64_data):
-        """
-        Simple OCR processing without OpenCV
-        """
-        try:
-            from PIL import Image, ImageEnhance
-            import io
-            import base64
-            
-            # Decode base64
-            img_data = base64.b64decode(base64_data)
-            img = Image.open(io.BytesIO(img_data))
-            
-            # Convert to grayscale
-            img = img.convert('L')
-            
-            # Enhance contrast
-            enhancer = ImageEnhance.Contrast(img)
-            img = enhancer.enhance(2.0)
-            
-            # OCR with optimized settings
-            custom_config = r'--oem 3 --psm 8 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
-            text = pytesseract.image_to_string(img, config=custom_config)
-            
-            # Clean the text
-            text = ''.join(filter(str.isalnum, text)).strip()
-            
-            return text if 4 <= len(text) <= 8 else None
-            
-        except Exception as e:
-            print(f"[  WARN  ] OCR processing failed: {str(e)}")
-            return None
 
     def solve_with_capsolver_fixed(self):
         """
@@ -881,34 +1127,43 @@ class EsetProtectHubRegister(object):
         - Robust token injection and verification
         """
         try:
-            import requests
             import json
-            import time
             import os
+            import time
 
-            client_key = os.environ.get('CAPSOLVER_API_KEY', 'CAP-D051815FD86B044D03BF198CC9DFEB4B')
-            if client_key.startswith('CAP-') is False:
-                print('[  WARN  ] Capsolver client key looks invalid, check environment variable CAPSOLVER_API_KEY')
+            import requests
+
+            client_key = os.environ.get(
+                "CAPSOLVER_API_KEY", "CAP-D051815FD86B044D03BF198CC9DFEB4B"
+            )
+            if client_key.startswith("CAP-") is False:
+                print(
+                    "[  WARN  ] Capsolver client key looks invalid, check environment variable CAPSOLVER_API_KEY"
+                )
 
             task_data = {
                 "clientKey": client_key,
                 "task": {
                     "type": "MTCaptchaTaskProxyless",
                     "websiteURL": self.driver.current_url,
-                    "websiteKey": "MTPublic-JnEM38Q6U"
-                }
+                    "websiteKey": "MTPublic-JnEM38Q6U",
+                },
             }
 
-            response = requests.post("https://api.capsolver.com/createTask", json=task_data, timeout=30)
+            response = requests.post(
+                "https://api.capsolver.com/createTask", json=task_data, timeout=30
+            )
             task_result = response.json()
 
-            if task_result.get('errorId', 1) != 0:
-                print(f"[  WARN  ] Capsolver error: {task_result.get('errorDescription', 'Unknown error')}")
+            if task_result.get("errorId", 1) != 0:
+                print(
+                    f"[  WARN  ] Capsolver error: {task_result.get('errorDescription', 'Unknown error')}"
+                )
                 return False
 
-            task_id = task_result.get('taskId')
+            task_id = task_result.get("taskId")
             if not task_id:
-                print('[  WARN  ] Capsolver did not return a taskId')
+                print("[  WARN  ] Capsolver did not return a taskId")
                 return False
 
             # Poll for result (up to ~2.5 minutes)
@@ -916,22 +1171,27 @@ class EsetProtectHubRegister(object):
                 time.sleep(5)
                 result_data = {"clientKey": client_key, "taskId": task_id}
                 try:
-                    result_response = requests.post("https://api.capsolver.com/getTaskResult", json=result_data, timeout=20)
+                    result_response = requests.post(
+                        "https://api.capsolver.com/getTaskResult",
+                        json=result_data,
+                        timeout=20,
+                    )
                     result = result_response.json()
                 except Exception as e:
                     print(f"[  WARN  ] Capsolver polling error: {e}")
                     continue
 
-                status = result.get('status')
-                if status == 'ready':
-                    solution = result.get('solution') or {}
-                    token = solution.get('token')
+                status = result.get("status")
+                if status == "ready":
+                    solution = result.get("solution") or {}
+                    token = solution.get("token")
                     if not token:
-                        print('[  WARN  ] Capsolver returned no token in solution')
+                        print("[  WARN  ] Capsolver returned no token in solution")
                         return False
 
                     # Inject the solution token into the page
-                    self.driver.execute_script("""
+                    self.driver.execute_script(
+                        """
                         (function(token){
                             var tokenField = document.querySelector('[name="mtcaptcha-verifiedtoken"]');
                             if (!tokenField) {
@@ -944,7 +1204,9 @@ class EsetProtectHubRegister(object):
                             // Dispatch change events if necessary
                             tokenField.dispatchEvent(new Event('change', { bubbles: true }));
                         })(arguments[0]);
-                    """, token)
+                    """,
+                        token,
+                    )
 
                     print("[   OK   ] MTCaptcha solved via Capsolver")
 
@@ -953,8 +1215,10 @@ class EsetProtectHubRegister(object):
 
                     # Verify presence of token on page
                     try:
-                        verified = self.driver.execute_script('return (document.querySelector("[name=\'mtcaptcha-verifiedtoken\']") || {}).value || ""')
-                        if verified and verified.strip() != '':
+                        verified = self.driver.execute_script(
+                            'return (document.querySelector("[name=\'mtcaptcha-verifiedtoken\']") || {}).value || ""'
+                        )
+                        if verified and verified.strip() != "":
                             return True
                     except:
                         pass
@@ -977,10 +1241,10 @@ class EsetProtectHubRegister(object):
     #         import requests
     #         import json
     #         import time
-    #         
+    #
     #         # Capsolver API (get free API key from https://www.capsolver.com/)
     #         API_KEY = "CAP-D051815FD86B044D03BF198CC9DFEB4B"  # Register for free account
-    #         
+    #
     #         # Step 1: Create task
     #         task_data = {
     #             "clientKey": API_KEY,
@@ -991,28 +1255,28 @@ class EsetProtectHubRegister(object):
     #                 "proxy": ""  # No proxy needed
     #             }
     #         }
-    #         
+    #
     #         response = requests.post("https://api.capsolver.com/createTask", json=task_data)
     #         task_result = response.json()
-    #         
+    #
     #         if task_result['errorId'] != 0:
     #             print(f"[  WARN  ] Capsolver error: {task_result['errorDescription']}")
     #             return False
-    #         
+    #
     #         task_id = task_result['taskId']
-    #         
+    #
     #         # Step 2: Poll for result
     #         for _ in range(30):  # 30 attempts with 2-second intervals
     #             time.sleep(2)
-    #             
+    #
     #             result_data = {
     #                 "clientKey": API_KEY,
     #                 "taskId": task_id
     #             }
-    #             
+    #
     #             result_response = requests.post("https://api.capsolver.com/getTaskResult", json=result_data)
     #             result = result_response.json()
-    #             
+    #
     #             if result['status'] == "ready":
     #                 # Inject the solution
     #                 self.driver.execute_script(f"""
@@ -1020,406 +1284,416 @@ class EsetProtectHubRegister(object):
     #                 """)
     #                 print("[   OK   ] MTCaptcha solved via Capsolver")
     #                 return True
-    #                 
+    #
     #         print("[  WARN  ] Capsolver timeout")
     #         return False
-    #         
+    #
     #     except Exception as e:
     #         print(f"[  WARN  ] Capsolver failed: {str(e)}")
     #         return False
-        
-    def solve_mtcaptcha_enhanced_ocr(self):
+
+    def solve_audio_captcha(self):
         """
-        Enhanced OCR method with better image preprocessing
-        """
-        try:
-            print("[  INFO  ] Attempting enhanced OCR captcha solving...")
-
-            if not OCR_AVAILABLE:
-                print('[  WARN  ] Pillow or pytesseract not available; skip enhanced OCR')
-                return False
-
-            # Wait for iframe
-            WebDriverWait(self.driver, 10).until(
-                EC.presence_of_element_located((By.ID, "register-captcha-iframe-1"))
-            )
-
-            # Switch to iframe
-            iframe = self.driver.find_element(By.ID, "register-captcha-iframe-1")
-            self.driver.switch_to.frame(iframe)
-            time.sleep(2)
-
-            # Get captcha image
-            captcha_img = self.driver.find_element(By.ID, "mtcap-image-1")
-
-            # Extract base64 from style attribute
-            style = captcha_img.get_attribute("style")
-            if "base64," in style:
-                base64_match = re.search(r'base64,([^"\']+)', style)
-                if base64_match:
-                    base64_data = base64_match.group(1)
-                    captcha_text = self._enhanced_ocr_captcha(base64_data)
-
-                    if captcha_text and len(captcha_text) >= 4:
-                        input_field = self.driver.find_element(By.ID, "mtcap-inputtext-1")
-                        input_field.clear()
-
-                        # Type slowly like human
-                        for char in captcha_text:
-                            input_field.send_keys(char)
-                            time.sleep(0.1)
-
-                        time.sleep(1)
-
-                        status_button = self.driver.find_element(By.ID, "mtcap-statusbutton-1")
-                        status_button.click()
-
-                        # Wait for verification
-                        time.sleep(3)
-
-                        # Check if verification was successful
-                        try:
-                            status_elem = self.driver.find_element(By.ID, "mtcap-status-1")
-                            if "success" in status_elem.get_attribute("class").lower():
-                                self.driver.switch_to.default_content()
-                                print(f"[   OK   ] Enhanced OCR solved: {captcha_text}")
-                                return True
-                        except:
-                            # If we can't check status, assume it worked
-                            self.driver.switch_to.default_content()
-                            print(f"[   OK   ] OCR submitted: {captcha_text}")
-                            return True
-
-            self.driver.switch_to.default_content()
-            print("[  WARN  ] Enhanced OCR failed")
-            return False
-
-        except Exception as e:
-            try:
-                self.driver.switch_to.default_content()
-            except:
-                pass
-            print(f"[  WARN  ] Enhanced OCR error: {str(e)}")
-            return False
-
-    def _enhanced_ocr_captcha(self, base64_data):
-        """
-        Enhanced OCR with multiple preprocessing techniques
+        Solve MTCaptcha using audio transcription (SpeechRecognition + pydub)
         """
         try:
-            # Decode base64
-            img_data = base64.b64decode(base64_data)
-            img = Image.open(io.BytesIO(img_data))
-            
-            # Multiple preprocessing attempts
-            attempts = [
-                self._ocr_preprocess_attempt1,
-                self._ocr_preprocess_attempt2, 
-                self._ocr_preprocess_attempt3,
-                self._ocr_preprocess_attempt4
-            ]
-            
-            best_result = None
-            best_confidence = 0
-            
-            for attempt_func in attempts:
-                processed_img = attempt_func(img.copy())
-                text = self._ocr_with_confidence(processed_img)
-                
-                if text and len(text) >= 4:
-                    # Simple confidence check
-                    confidence = len(text)
-                    if any(c.isdigit() for c in text):
-                        confidence += 0.5
-                    if any(c.isupper() for c in text) and any(c.islower() for c in text):
-                        confidence += 0.5
-                        
-                    if confidence > best_confidence:
-                        best_confidence = confidence
-                        best_result = text
-            
-            return best_result if best_result else None
-            
-        except Exception as e:
-            print(f"[  WARN  ] Enhanced OCR processing failed: {str(e)}")
-            return None
-
-    def _ocr_preprocess_attempt1(self, img):
-        """Basic contrast enhancement"""
-        img = img.convert('L')  # Convert to grayscale
-        enhancer = ImageEnhance.Contrast(img)
-        img = enhancer.enhance(2.5)  # Increase contrast
-        enhancer = ImageEnhance.Sharpness(img)
-        img = enhancer.enhance(2.0)  # Increase sharpness
-        return img
-
-    def _ocr_preprocess_attempt2(self, img):
-        """Binarization with adaptive threshold"""
-        img = img.convert('L')
-        
-        # Simple thresholding
-        pixels = list(img.getdata())
-        threshold = sum(pixels) // len(pixels)  # Average brightness
-        
-        # Apply threshold
-        img = img.point(lambda p: 255 if p > threshold else 0)
-        
-        # Remove noise
-        img = img.filter(ImageFilter.MedianFilter(size=3))
-        return img
-
-    def _ocr_preprocess_attempt3(self, img):
-        """Edge enhancement"""
-        img = img.convert('L')
-        # Find edges using built-in filter
-        img = img.filter(ImageFilter.FIND_EDGES)
-        # Invert (edges become white on black background)
-        img = ImageOps.invert(img)
-        # Enhance contrast
-        enhancer = ImageEnhance.Contrast(img)
-        img = enhancer.enhance(3.0)
-        return img
-
-    def _ocr_preprocess_attempt4(self, img):
-        """Resize and clean"""
-        img = img.convert('L')
-        # Resize for better OCR (standardize size)
-        if img.size[0] < 200 or img.size[1] < 50:
-            img = img.resize((300, 100), Image.Resampling.LANCZOS)
-        # Clean with multiple filters
-        img = img.filter(ImageFilter.MedianFilter(size=3))
-        img = img.filter(ImageFilter.SHARPEN)
-        enhancer = ImageEnhance.Contrast(img)
-        img = enhancer.enhance(2.0)
-        return img
-
-    def _ocr_with_confidence(self, img):
-        """OCR with multiple configuration attempts"""
-        configs = [
-            r'--oem 3 --psm 8',
-            r'--oem 3 --psm 7', 
-            r'--oem 3 --psm 13',
-            r'--oem 3 --psm 8 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789',
-            r'--oem 3 --psm 7 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
-        ]
-        
-        for config in configs:
-            try:
-                text = pytesseract.image_to_string(img, config=config)
-                # Clean the text - remove non-alphanumeric characters
-                text = ''.join(filter(str.isalnum, text)).strip()
-                if text and len(text) >= 4 and len(text) <= 8:
-                    return text
-            except Exception as e:
-                continue
-        
-        return None
-
-    # ORPHANED FUNCTION - Nested duplicate definition, commented out
-    # # MODIFY your existing _enhanced_ocr_captcha to use the new method
-    #     def _enhanced_ocr_captcha(self, base64_data):
-    #         """
-    #         Enhanced OCR - Modified to avoid OpenCV completely
-    #         """
-    #         try:
-    #             # Use the OpenCV-free method instead
-    #             return self._enhanced_ocr_captcha_no_cv2(base64_data)
-    #             
-    #         except Exception as e:
-    #             print(f"[  WARN  ] Enhanced OCR processing failed: {str(e)}")
-    #             return None
-
-        
-    def solve_mtcaptcha_with_service_simple(self):
-        """
-        Solve MTCaptcha using 2Captcha service (or compatible) - improved version
-        - Use `TWO_CAPTCHA_API_KEY` from env if available
-        - Use page URL as `url` parameter (not iframe src)
-        - More robust result handling and verification
-        """
-        try:
-            from twocaptcha import TwoCaptcha
             import os
 
-            api_key = os.environ.get('TWO_CAPTCHA_API_KEY', '7d9d06002654b3ec85914563bf420955')
-            if api_key == '7d9d06002654b3ec85914563bf420955':
-                print('[  WARN  ] Using fallback TwoCaptcha key; consider setting TWO_CAPTCHA_API_KEY environment variable')
+            import requests
+            import speech_recognition as sr
+            from pydub import AudioSegment
 
-            solver = TwoCaptcha(api_key)
+            print("[  INFO  ] Attempting audio captcha solving...")
 
-            # Prefer main page URL when asking solver
-            page_url = self.driver.current_url
-
-            # Use site key for MTCaptcha
-            sitekey = 'MTPublic-JnEM38Q6U'
-
-            # Request solution
-            result = None
+            # Ensure we are in the iframe
             try:
-                result = solver.mtcaptcha(sitekey=sitekey, url=page_url)
-            except Exception:
-                # Some library versions expect different param names - try alternative call
-                try:
-                    result = solver.mtcaptcha(site_key=sitekey, page_url=page_url)
-                except Exception as e:
-                    raise
+                iframe = self.driver.find_element(By.ID, "register-captcha-iframe-1")
+                self.driver.switch_to.frame(iframe)
+            except:
+                pass  # Already in iframe or failed
 
-            token = None
-            # TwoCaptcha wrappers may return different shapes - be defensive
-            if isinstance(result, dict):
-                token = result.get('code') or result.get('solution') or result.get('response')
-                if isinstance(token, dict):
-                    token = token.get('token') or token.get('code') or token.get('gRecaptchaResponse') or token.get('text')
-            elif isinstance(result, str):
-                token = result
+            # Find and click audio button
+            try:
+                audio_btn = WebDriverWait(self.driver, 5).until(
+                    EC.element_to_be_clickable(
+                        (By.CLASS_NAME, "mtcaptcha-audio-button")
+                    )
+                )
+                audio_btn.click()
+                time.sleep(2)
+            except Exception as e:
+                print(f"[  WARN  ] Could not find or click audio button: {e}")
+                # Switch back if we failed inside iframe
+                self.driver.switch_to.default_content()
+                return False
 
-            if not token:
-                raise RuntimeError('2Captcha returned no token')
+            # Find audio source URL
+            try:
+                audio_elem = self.driver.find_element(By.ID, "mtcap-audio-1")
+                audio_url = audio_elem.get_attribute("src")
+            except:
+                print("[  WARN  ] Could not find audio source element")
+                self.driver.switch_to.default_content()
+                return False
 
-            print(f"[  INFO  ] 2Captcha solution received")
+            if not audio_url:
+                print("[  WARN  ] Audio URL is empty")
+                self.driver.switch_to.default_content()
+                return False
 
-            # Switch to iframe and input the solution
-            iframe = self.driver.find_element(By.ID, "register-captcha-iframe-1")
-            self.driver.switch_to.frame(iframe)
+            # Download audio
+            try:
+                audio_response = requests.get(audio_url, timeout=10)
+                if audio_response.status_code != 200:
+                    print("[  WARN  ] Failed to download audio")
+                    self.driver.switch_to.default_content()
+                    return False
+            except Exception as e:
+                print(f"[  WARN  ] Failed to download audio: {e}")
+                self.driver.switch_to.default_content()
+                return False
 
-            input_field = self.driver.find_element(By.ID, "mtcap-inputtext-1")
-            input_field.clear()
-            for ch in token:
-                input_field.send_keys(ch)
-                time.sleep(0.06)
-            time.sleep(0.5)
+            # Save temp file
+            try:
+                with open("captcha_audio.mp3", "wb") as f:
+                    f.write(audio_response.content)
+            except Exception as e:
+                print(f"[  WARN  ] Failed to save audio file: {e}")
+                self.driver.switch_to.default_content()
+                return False
 
-            # Click verify button
-            verify_button = self.driver.find_element(By.ID, "mtcap-statusbutton-1")
-            verify_button.click()
+            # Convert to WAV
+            try:
+                sound = AudioSegment.from_file("captcha_audio.mp3")
+                sound.export("captcha_audio.wav", format="wav")
+            except Exception as e:
+                # pydub often requires ffmpeg or libav
+                print(f"[  WARN  ] Audio conversion failed (ffmpeg missing?): {e}")
+                self.driver.switch_to.default_content()
+                return False
 
-            # Switch back to main content
-            self.driver.switch_to.default_content()
+            # Transcribe
+            try:
+                r = sr.Recognizer()
+                with sr.AudioFile("captcha_audio.wav") as source:
+                    audio_data = r.record(source)
+                    # Recognize (using Google Speech Recognition)
+                    text = r.recognize_google(audio_data)
+            except Exception as e:
+                print(f"[  WARN  ] Transcription failed: {e}")
+                self.driver.switch_to.default_content()
+                return False
 
-            # Wait and verify token presence/status
-            for _ in range(10):
-                try:
-                    val = self.driver.execute_script("return (document.querySelector('[name=\'mtcaptcha-verifiedtoken\']')||{}).value || ''")
-                    if val and val.strip() != '':
-                        print('[   OK   ] MTCaptcha solved via 2Captcha')
-                        return True
-                except Exception:
-                    pass
+            print(f"[  INFO  ] Audio transcribed: {text}")
+
+            # Clean text (alphanumeric only)
+            text = "".join(filter(str.isalnum, text))
+
+            # Submit
+            try:
+                input_field = self.driver.find_element(By.ID, "mtcap-inputtext-1")
+                input_field.clear()
+                input_field.send_keys(text)
                 time.sleep(1)
 
-            print('[  WARN  ] 2Captcha submitted but not verified yet')
+                self.driver.find_element(By.ID, "mtcap-statusbutton-1").click()
+                time.sleep(2)
+
+                # Verify
+                success = False
+                try:
+                    status_elem = self.driver.find_element(By.ID, "mtcap-status-1")
+                    if "success" in status_elem.get_attribute("class").lower():
+                        success = True
+                except:
+                    pass
+
+                # Double check token
+                if not success:
+                    try:
+                        token_val = self.driver.execute_script(
+                            "return (document.querySelector('[name=\"mtcaptcha-verifiedtoken\"]') || {}).value || ''"
+                        )
+                        if token_val and token_val.strip() != "":
+                            success = True
+                    except:
+                        pass
+
+                if success:
+                    self.driver.switch_to.default_content()
+                    print(f"[   OK   ] Audio captcha solved: {text}")
+                    return True
+                else:
+                    # Save screenshot for debug
+                    try:
+                        self.driver.save_screenshot("audio_solve_failed.png")
+                        print("[  INFO  ] Saved screenshot to audio_solve_failed.png")
+                    except:
+                        pass
+            except Exception as e:
+                print(f"[  WARN  ] Error submitting audio solution: {e}")
+
+            self.driver.switch_to.default_content()
             return False
 
         except Exception as e:
-            print(f"[  WARN  ] 2Captcha failed: {str(e)}")
             try:
                 self.driver.switch_to.default_content()
             except:
                 pass
+            print(f"[  WARN  ] Audio captcha failed: {e}")
             return False
-    
-    # ORPHANED FUNCTION - Definition missing, only called but never defined
-    # def _enhanced_ocr_captcha_no_cv2(self, base64_data):
-    #     """
-    #     Missing implementation - this function is called but never defined
-    #     """
-    #     pass
-        
-    # ORPHANED FUNCTION - Never actually called
-    # def solve_mtcaptcha(self):
-    #     """
-    #     Automatically solve MTCaptcha by extracting and entering the text
-    #     """
-    #     try:
-    #         print("[  INFO  ] Attempting to solve MTCaptcha automatically...")
-    #         
-    #         # Wait for the iframe to be present
-    #         WebDriverWait(self.driver, 10).until(
-    #             EC.presence_of_element_located((By.ID, "register-captcha-iframe-1"))
-    #         )
-    #         
-    #         # Switch to the captcha iframe
-    #         iframe = self.driver.find_element(By.ID, "register-captcha-iframe-1")
-    #         self.driver.switch_to.frame(iframe)
-    #         
-    #         # Wait for the captcha image to load
-    #         time.sleep(2)
-    #         
-    #         # Get the captcha image element
-    #         captcha_img = self.driver.find_element(By.ID, "mtcap-image-1")
-    #         
-    #         # Extract the base64 image data from background-image style
-    #         style = captcha_img.get_attribute("style")
-    #         if "base64," in style:
-    #             # Extract base64 data
-    #             import re
-    #             base64_match = re.search(r'base64,([^"\']+)', style)
-    #             if base64_match:
-    #                 base64_data = base64_match.group(1)
-    #                 
-    #                 # Use OCR to read the captcha text
-    #                 captcha_text = self._ocr_captcha(base64_data)
-    #                 
-    #                 if captcha_text:
-    #                     # Find and fill the input field
-    #                     input_field = self.driver.find_element(By.ID, "mtcap-inputtext-1")
-    #                     input_field.clear()
-    #                     input_field.send_keys(captcha_text)
-    #                     time.sleep(1)
-    #                     
-    #                     # Click the status button to verify
-    #                     status_button = self.driver.find_element(By.ID, "mtcap-statusbutton-1")
-    #                     status_button.click()
-    #                     
-    #                     # Switch back to main content
-    #                     self.driver.switch_to.default_content()
-    #                     
-    #                     print(f"[   OK   ] MTCaptcha solved with text: {captcha_text}")
-    #                     return True
-    #         
-    #         # If automatic solving fails, switch back and let user solve manually
-    #         self.driver.switch_to.default_content()
-    #         print("[  WARN  ] Automatic captcha solving failed, please solve manually")
-    #         return False
-    #         
-    #     except Exception as e:
-    #         self.driver.switch_to.default_content()
-    #         print(f"[  WARN  ] Could not auto-solve captcha: {str(e)}")
-    #         return False
-    
-    # ORPHANED FUNCTION - Never actually called
-    # def _ocr_captcha(self, base64_data):
-    #     """
-    #     Use OCR to extract text from captcha image
-    #     """
-    #     try:
-    #         import base64
-    #         from PIL import Image
-    #         import io
-    #         import pytesseract
-    #         
-    #         # Decode base64 to image
-    #         img_data = base64.b64decode(base64_data)
-    #         img = Image.open(io.BytesIO(img_data))
-    #         
-    #         # Preprocess image for better OCR
-    #         img = img.convert('L')  # Convert to grayscale
-    #         
-    #         # Use Tesseract OCR
-    #         text = pytesseract.image_to_string(img, config='--psm 7 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789')
-    #         
-    #         # Clean the text
-    #         text = ''.join(filter(str.isalnum, text))
-    #         
-    #         return text.strip()
-    #         
-    #     except ImportError:
-    #         print("[  WARN  ] pytesseract or Pillow not installed. Install with: pip install pytesseract Pillow")
+        finally:
+            # Cleanup
+            try:
+                if os.path.exists("captcha_audio.mp3"):
+                    os.remove("captcha_audio.mp3")
+                if os.path.exists("captcha_audio.wav"):
+                    os.remove("captcha_audio.wav")
+            except:
+                pass
+
+    def solve_with_ddddocr(self, retries=3):
+        """
+        Solve MTCaptcha using ddddocr (lightweight, offline, open-source)
+        Retries specified number of times if standard validation fails.
+        """
+        try:
+            import base64
+
+            import ddddocr
+
+            print(f"[  INFO  ] Attempting ddddocr solving (max {retries} attempts)...")
+            ocr = ddddocr.DdddOcr(show_ad=False)
+
+            for attempt in range(retries):
+                # Wait for iframe
+                WebDriverWait(self.driver, 10).until(
+                    EC.presence_of_element_located((By.ID, "register-captcha-iframe-1"))
+                )
+
+                # Switch to iframe
+                iframe = self.driver.find_element(By.ID, "register-captcha-iframe-1")
+                self.driver.switch_to.frame(iframe)
+                time.sleep(1)
+
+                # Get captcha image
+                try:
+                    captcha_img = self.driver.find_element(By.ID, "mtcap-image-1")
+                    style = captcha_img.get_attribute("style")
+                    base64_data = None
+                    if "base64," in style:
+                        import re
+
+                        base64_match = re.search(r'base64,([^"\']+)', style)
+                        if base64_match:
+                            base64_data = base64_match.group(1)
+                except Exception:
+                    base64_data = None
+
+                if not base64_data:
+                    self.driver.switch_to.default_content()  # Exit iframe before clicking refresh
+                    # If can't get image, try refreshing
+                    if attempt < retries - 1:
+                        print(
+                            f"[  WARN  ] Could not get image, refreshing... ({attempt+1}/{retries})"
+                        )
+                        try:
+                            refresh_btn = self.driver.find_element(
+                                By.CSS_SELECTOR, ".mtcaptcha-reload-button"
+                            )
+                            refresh_btn.click()
+                            time.sleep(2)
+                        except:
+                            pass
+                        continue
+                    else:
+                        return False
+
+                # Solve with ddddocr
+                img_bytes = base64.b64decode(base64_data)
+                captcha_text = ocr.classification(img_bytes)
+
+                # Clean text (alphanumeric only)
+                captcha_text = "".join(filter(str.isalnum, captcha_text))
+
+                if captcha_text and 4 <= len(captcha_text) <= 8:
+                    input_field = self.driver.find_element(By.ID, "mtcap-inputtext-1")
+                    input_field.clear()
+
+                    for char in captcha_text:
+                        input_field.send_keys(char)
+                        time.sleep(0.05)
+
+                    time.sleep(0.5)
+
+                    # Click verify
+                    self.driver.find_element(By.ID, "mtcap-statusbutton-1").click()
+
+                    time.sleep(2)
+
+                    # Check status
+                    success = False
+
+                    # 1. Check verified token (Most reliable)
+                    try:
+                        token_val = self.driver.execute_script(
+                            "return (document.querySelector('[name=\"mtcaptcha-verifiedtoken\"]') || {}).value || ''"
+                        )
+                        print(f"[ DEBUG  ] Token value: '{token_val}'")
+                        if token_val and token_val.strip() != "":
+                            success = True
+                            print("[ DEBUG  ] Valid token found.")
+                    except Exception as e:
+                        print(f"[ DEBUG  ] Token check error: {e}")
+
+                    # 2. Check visual status (Green tick / Success message)
+                    if not success:
+                        try:
+                            # Check for status element class
+                            status_elem = self.driver.find_element(
+                                By.ID, "mtcap-status-1"
+                            )
+                            status_class = status_elem.get_attribute("class").lower()
+                            print(f"[ DEBUG  ] Status element class: '{status_class}'")
+                            if "success" in status_class:
+                                success = True
+                                print("[ DEBUG  ] Success class found.")
+
+                            # Check for 'verified' text or green tick specific elements if class check fails
+                            if "verified" in status_class:
+                                success = True
+                                print("[ DEBUG  ] Verified class found.")
+                        except:
+                            pass
+
+                    # Enhanced Validation: Check for Green Tick Style and Aria Label (from User feedback/Debug)
+                    if not success:
+                        try:
+                            # Check mtcap-statusimg-1 style for green color
+                            status_img = self.driver.find_element(
+                                By.ID, "mtcap-statusimg-1"
+                            )
+                            style = status_img.get_attribute("style")
+                            if (
+                                "rgb(141, 198, 64)" in style
+                                or "color: #8dc640" in style
+                            ):
+                                success = True
+                                print(
+                                    "[ DEBUG  ] Visual success (green tick color) detected!"
+                                )
+                        except:
+                            pass
+
+                    if not success:
+                        try:
+                            # Check Aria Label
+                            desc_elem = self.driver.find_element(
+                                By.ID, "desc4StatusButton-1"
+                            )
+                            desc_text = (
+                                desc_elem.get_attribute("innerHTML") or desc_elem.text
+                            )
+                            if "verified successfully" in desc_text.lower():
+                                success = True
+                                print("[ DEBUG  ] Aria label indicates success!")
+                        except:
+                            pass
+
+                    if not success:
+                        # Double Check token value as a final resort
+                        try:
+                            token_val = self.driver.execute_script(
+                                "return (document.querySelector('[name=\"mtcaptcha-verifiedtoken\"]') || {}).value || ''"
+                            )
+                            if token_val:
+                                success = True
+                                print(
+                                    f"[ DEBUG  ] Token found via JS: {token_val[:15]}..."
+                                )
+                        except:
+                            pass
+
+                    self.driver.switch_to.default_content()
+
+                    if success:
+                        print(f"[   OK   ] ddddocr solved: {captcha_text}")
+                        return True
+                    else:
+                        print(
+                            f"[  WARN  ] ddddocr failed validation (text: {captcha_text})"
+                        )
+                        # Debug artifact
+                        try:
+                            self.driver.switch_to.frame(
+                                self.driver.find_element(
+                                    By.ID, "register-captcha-iframe-1"
+                                )
+                            )
+                            self.driver.save_screenshot(
+                                f"ddddocr_fail_debug_{attempt}.png"
+                            )
+                            with open(
+                                f"ddddocr_fail_debug_{attempt}.html",
+                                "w",
+                                encoding="utf-8",
+                            ) as f:
+                                f.write(self.driver.page_source)
+                            print(
+                                f"[ DEBUG  ] Saved debug artifacts for attempt {attempt}"
+                            )
+                            self.driver.switch_to.default_content()
+                        except:
+                            self.driver.switch_to.default_content()
+
+                else:
+                    self.driver.switch_to.default_content()
+                    print(f"[  WARN  ] ddddocr text invalid length: {captcha_text}")
+
+                # If we are here, it failed. Refresh and try again if attempts remain
+                if attempt < retries - 1:
+                    print(f"[  INFO  ] Retrying ddddocr... ({attempt+1}/{retries})")
+                    try:
+                        # Ensure we are in default content
+                        refresh_btn = self.driver.find_element(
+                            By.CSS_SELECTOR, ".mtcaptcha-reload-button"
+                        )
+                        refresh_btn.click()
+                        time.sleep(2)
+                    except Exception as e:
+                        print(f"[  WARN  ] Could not click refresh: {e}")
+
+            print(f"[  WARN  ] ddddocr failed after {retries} attempts")
+
+            # Fallback to audio (only if enabled)
+            if os.environ.get("ENABLE_AUDIO_CAPTCHA", "false").lower() == "true":
+                print("[  INFO  ] Visual solve failed, attempting audio fallback...")
+                if self.solve_audio_captcha():
+                    return True
+            else:
+                print(
+                    "[  INFO  ] Audio fallback disabled (ENABLE_AUDIO_CAPTCHA != true)"
+                )
+
+            return False
+
+        except ImportError:
+            self.driver.switch_to.default_content()
+            print(
+                "[  WARN  ] ddddocr module not found. Install with: pip install ddddocr"
+            )
+            return False
+        except Exception as e:
+            try:
+                self.driver.switch_to.default_content()
+            except:
+                pass
+            print(f"[  WARN  ] ddddocr error: {str(e)}")
+            return False
+
     #         return None
-    #     except Exception as e:
-    #         print(f"[  WARN  ] OCR failed: {str(e)}")
-    #         return None
-        
+
     def refresh_until_easy_captcha(self, max_attempts=10):
         """
         Refresh captcha until an easily readable one appears or an automated solver succeeds.
@@ -1428,12 +1702,16 @@ class EsetProtectHubRegister(object):
         for attempt in range(max_attempts):
             try:
                 # Find refresh button and click it
-                refresh_btn = self.driver.find_element(By.CSS_SELECTOR, ".mtcaptcha-reload-button")
+                refresh_btn = self.driver.find_element(
+                    By.CSS_SELECTOR, ".mtcaptcha-reload-button"
+                )
                 refresh_btn.click()
                 # random small wait to simulate human
                 time.sleep(1 + random.random() * 2)
 
-                # Try in-order: simple OCR -> enhanced -> capsolver -> 2captcha
+                # Try in-order: ddddocr -> simple OCR -> enhanced -> capsolver -> 2captcha
+                if self.solve_with_ddddocr():
+                    return True
                 if self.solve_mtcaptcha_simple_ocr():
                     return True
                 if self.solve_mtcaptcha_enhanced_ocr():
@@ -1446,7 +1724,7 @@ class EsetProtectHubRegister(object):
             except Exception as e:
                 # If refresh button isn't present, exit early
                 # but continue trying solvers directly
-                if hasattr(e, 'name'):
+                if hasattr(e, "name"):
                     pass
                 try:
                     if self.solve_mtcaptcha_simple_ocr():
@@ -1460,114 +1738,167 @@ class EsetProtectHubRegister(object):
                 except:
                     pass
 
-        print("[  WARN  ] Could not find easy captcha after multiple refreshes or automated solvers failed")
+        print(
+            "[  WARN  ] Could not find easy captcha after multiple refreshes or automated solvers failed"
+        )
         return False
-        
+
     def createAccount(self):
         exec_js = self.driver.execute_script
         uCE = untilConditionExecute
         # STEP 0
 
-        logging.info('Loading ESET ProtectHub Page...')
-        console_log('\nLoading ESET ProtectHub Page...', INFO, silent_mode=SILENT_MODE)
+        logging.info("Loading ESET ProtectHub Page...")
+        console_log("\nLoading ESET ProtectHub Page...", INFO, silent_mode=SILENT_MODE)
         if isinstance(self.email_obj, WEB_WRAPPER_EMAIL_APIS_CLASSES):
-            self.driver.switch_to.new_window('tab')
+            self.driver.switch_to.new_window("tab")
             self.window_handle = self.driver.current_window_handle
-        self.driver.get('https://protecthub.eset.com/public/registration?culture=en-US')
+        self.driver.get("https://protecthub.eset.com/public/registration?culture=en-US")
         uCE(self.driver, f'return {GET_EBID}("continue") != null')
-        logging.info('Successfully!')
-        console_log('Successfully!', OK, silent_mode=SILENT_MODE)
+        logging.info("Successfully!")
+        console_log("Successfully!", OK, silent_mode=SILENT_MODE)
 
         # STEP 1
-        logging.info('Data filling...')
-        console_log('\nData filling...', INFO, silent_mode=SILENT_MODE)
+        logging.info("Data filling...")
+        console_log("\nData filling...", INFO, silent_mode=SILENT_MODE)
         exec_js(f'return {GET_EBID}("email-input")').send_keys(self.email_obj.email)
         exec_js(f'return {GET_EBID}("company-name-input")').send_keys(dataGenerator(10))
         # Select country
         exec_js(f"return {GET_EBID}('country-select')").click()
-        selected_country = 'Ukraine'
-        logging.info('Selecting the country...')
+        selected_country = "Ukraine"
+        logging.info("Selecting the country...")
         # Find and click country dropdown
         try:
             # Wait for the select component to be present
             WebDriverWait(self.driver, 10).until(
                 EC.presence_of_element_located(("id", "country-select"))
             )
-    
+
             # Find the input field inside the React Select
             country_input = self.driver.find_element("id", "country-select-input")
-    
+
             # Click to open the dropdown
             country_input.click()
             time.sleep(0.5)
-    
+
             # Clear any existing value and type the country name
             country_input.clear()
-            country_input.send_keys(selected_country)  # e.g., "Ukraine", "United States", etc.
+            country_input.send_keys(
+                selected_country
+            )  # e.g., "Ukraine", "United States", etc.
             time.sleep(0.5)
-    
+
             # Press Enter to select the first matching option
             country_input.send_keys(Keys.ENTER)
             time.sleep(0.5)
-    
+
             print(f"[   OK   ] Country '{selected_country}' selected successfully!")
-    
+
         except Exception as e:
             print(f"[ FAILED ] Could not select country: {str(e)}")
             # Optionally, you can skip this step or use a default
             pass
-        exec_js(f'return {GET_EBID}("company-vat-input")').send_keys(dataGenerator(10, True))
-        exec_js(f'return {GET_EBID}("company-crn-input")').send_keys(dataGenerator(10, True))
+        exec_js(f'return {GET_EBID}("company-vat-input")').send_keys(
+            dataGenerator(10, True)
+        )
+        exec_js(f'return {GET_EBID}("company-crn-input")').send_keys(
+            dataGenerator(10, True)
+        )
 
         # After country selection, before the manual captcha prompt
         # Allow override of solver order via environment variable CAPTCHA_SERVICE (capsolver|2captcha|ocr|auto)
         import os
-        captcha_service = os.environ.get('CAPTCHA_SERVICE', 'auto').lower()
+
+        captcha_service = os.environ.get("CAPTCHA_SERVICE", "auto").lower()
 
         def try_order(order_list):
             for name in order_list:
-                if name == 'ocr' and self.solve_mtcaptcha_simple_ocr():
+                if name == "ddddocr" and self.solve_with_ddddocr():
                     return True
-                if name == 'enhanced_ocr' and self.solve_mtcaptcha_enhanced_ocr():
+                if name == "ocr" and self.solve_mtcaptcha_simple_ocr():
+
                     return True
-                if name == 'refresh' and self.refresh_until_easy_captcha():
+                if name == "enhanced_ocr" and self.solve_mtcaptcha_enhanced_ocr():
                     return True
-                if name == 'capsolver' and self.solve_with_capsolver_fixed():
+                if name == "refresh" and self.refresh_until_easy_captcha():
                     return True
-                if name == '2captcha' and self.solve_mtcaptcha_with_service_simple():
+                if name == "capsolver" and self.solve_with_capsolver_fixed():
+                    return True
+                if name == "2captcha" and self.solve_mtcaptcha_with_service_simple():
                     return True
             return False
 
-        if captcha_service == 'capsolver':
-            order = ['capsolver', '2captcha', 'refresh', 'enhanced_ocr', 'ocr']
-        elif captcha_service in ('2captcha', 'twocaptcha'):
-            order = ['2captcha', 'capsolver', 'refresh', 'enhanced_ocr', 'ocr']
-        elif captcha_service == 'ocr':
-            order = ['ocr', 'enhanced_ocr', 'refresh', 'capsolver', '2captcha']
+        if captcha_service == "capsolver":
+            order = [
+                "capsolver",
+                "2captcha",
+                "refresh",
+                "ddddocr",
+                "enhanced_ocr",
+                "ocr",
+            ]
+        elif captcha_service in ("2captcha", "twocaptcha"):
+            order = [
+                "2captcha",
+                "capsolver",
+                "refresh",
+                "ddddocr",
+                "enhanced_ocr",
+                "ocr",
+            ]
+        elif captcha_service == "ocr":
+            order = [
+                "ocr",
+                "enhanced_ocr",
+                "ddddocr",
+                "refresh",
+                "capsolver",
+                "2captcha",
+            ]
         else:  # auto
-            order = ['ocr', 'enhanced_ocr', 'refresh', 'capsolver', '2captcha']
+            order = [
+                "ddddocr",
+                "ocr",
+                "enhanced_ocr",
+                "refresh",
+                "capsolver",
+                "2captcha",
+            ]
 
         solved = try_order(order)
 
         # Final fallback to manual
         if not solved:
-            logging.warning('Solve the captcha on the page manually!!!')
-            console_log(f'\n{colorama.Fore.CYAN}Solve the captcha on the page manually!!!{colorama.Fore.RESET}', INFO, False, SILENT_MODE)
-            while True: # captcha
+            logging.warning("Solve the captcha on the page manually!!!")
+            console_log(
+                f"\n{colorama.Fore.CYAN}Solve the captcha on the page manually!!!{colorama.Fore.RESET}",
+                INFO,
+                False,
+                SILENT_MODE,
+            )
+            while True:  # captcha
                 try:
-                    mtcaptcha_solved_token = exec_js(f'return {GET_EBCN}("mtcaptcha-verifiedtoken")[0].value')
-                    if mtcaptcha_solved_token.strip() != '':
+                    mtcaptcha_solved_token = exec_js(
+                        f'return {GET_EBCN}("mtcaptcha-verifiedtoken")[0].value'
+                    )
+                    if mtcaptcha_solved_token.strip() != "":
                         break
                 except Exception as E:
                     pass
                 time.sleep(1)
         exec_js(f'return {GET_EBID}("continue").click()')
         try:
-            uCE(self.driver, f'return {GET_EBID}("registration-email-sent").innerText === "We sent you a verification email"', max_iter=10)
-            logging.info('Successfully!')
-            console_log('Successfully!', OK, silent_mode=SILENT_MODE)
+            uCE(
+                self.driver,
+                f'return {GET_EBID}("registration-email-sent").innerText === "We sent you a verification email"',
+                max_iter=10,
+            )
+            logging.info("Successfully!")
+            console_log("Successfully!", OK, silent_mode=SILENT_MODE)
         except:
-            raise IPBlockedException('\nESET temporarily blocked your IP, try again later!!! Try to use VPN/Proxy or try to change Email API!!!')
+            raise IPBlockedException(
+                "\nESET temporarily blocked your IP, try again later!!! Try to use VPN/Proxy or try to change Email API!!!"
+            )
         return True
 
     def activateAccount(self):
@@ -1575,13 +1906,15 @@ class EsetProtectHubRegister(object):
         uCE = untilConditionExecute
 
         # STEP 1
-        logging.info('Data filling...')
-        console_log('\nData filling...', INFO, silent_mode=SILENT_MODE)
+        logging.info("Data filling...")
+        console_log("\nData filling...", INFO, silent_mode=SILENT_MODE)
         exec_js(f'return {GET_EBID}("first-name-input")').send_keys(dataGenerator(10))
         exec_js(f'return {GET_EBID}("last-name-input")').send_keys(dataGenerator(10))
         exec_js(f'return {GET_EBID}("first-name-input")').send_keys(dataGenerator(10))
         exec_js(f'return {GET_EBID}("password-input")').send_keys(self.eset_password)
-        exec_js(f'return {GET_EBID}("password-repeat-input")').send_keys(self.eset_password)
+        exec_js(f'return {GET_EBID}("password-repeat-input")').send_keys(
+            self.eset_password
+        )
         exec_js(f'return {GET_EBID}("continue").click()')
 
         # STEP 2
@@ -1589,32 +1922,57 @@ class EsetProtectHubRegister(object):
         exec_js(f'return {GET_EBID}("phone-input")').send_keys(dataGenerator(10, True))
         time.sleep(0.5)
         exec_js(f'return {GET_EBID}("continue").click()')
-        uCE(self.driver, f'return {GET_EBID}("activated-user-title").innerText === "Your account has been successfully activated"', max_iter=15)
-        logging.info('Successfully!')
-        console_log('Successfully!', OK, silent_mode=SILENT_MODE)
+        uCE(
+            self.driver,
+            f'return {GET_EBID}("activated-user-title").innerText === "Your account has been successfully activated"',
+            max_iter=15,
+        )
+        logging.info("Successfully!")
+        console_log("Successfully!", OK, silent_mode=SILENT_MODE)
 
     def confirmAccount(self):
         if isinstance(self.email_obj, CustomEmailAPI):
-            token = parseToken(self.email_obj, eset_business=True, max_iter=100, delay=3)
+            token = parseToken(
+                self.email_obj, eset_business=True, max_iter=100, delay=3
+            )
         else:
-            logging.info(f'[{self.email_obj.class_name}] ProtectHub-Token interception...')
-            console_log(f'\n[{self.email_obj.class_name}] ProtectHub-Token interception...', INFO, silent_mode=SILENT_MODE)
+            logging.info(
+                f"[{self.email_obj.class_name}] ProtectHub-Token interception..."
+            )
+            console_log(
+                f"\n[{self.email_obj.class_name}] ProtectHub-Token interception...",
+                INFO,
+                silent_mode=SILENT_MODE,
+            )
             if isinstance(self.email_obj, WEB_WRAPPER_EMAIL_APIS_CLASSES):
-                token = parseToken(self.email_obj, self.driver, True, max_iter=100, delay=3)
+                token = parseToken(
+                    self.email_obj, self.driver, True, max_iter=100, delay=3
+                )
                 self.driver.switch_to.window(self.window_handle)
             else:
-                token = parseToken(self.email_obj, eset_business=True, max_iter=100, delay=3) # 1secmail
-        logging.info(f'ProtectHub-Token: {token}')
-        logging.info('Account confirmation is in progress...')
-        console_log(f'ProtectHub-Token: {token}', OK, silent_mode=SILENT_MODE)
-        console_log('\nAccount confirmation is in progress...', INFO, silent_mode=SILENT_MODE)
-        self.driver.get(f'https://protecthub.eset.com/public/activation/{token}/?culture=en-US')
-        untilConditionExecute(self.driver, f'return {GET_EBID}("first-name-input") != null')
-        logging.info('Account successfully confirmed!')
-        console_log('Account successfully confirmed!', OK, silent_mode=SILENT_MODE)
+                token = parseToken(
+                    self.email_obj, eset_business=True, max_iter=100, delay=3
+                )  # 1secmail
+        logging.info(f"ProtectHub-Token: {token}")
+        logging.info("Account confirmation is in progress...")
+        console_log(f"ProtectHub-Token: {token}", OK, silent_mode=SILENT_MODE)
+        console_log(
+            "\nAccount confirmation is in progress...", INFO, silent_mode=SILENT_MODE
+        )
+        self.driver.get(
+            f"https://protecthub.eset.com/public/activation/{token}/?culture=en-US"
+        )
+        untilConditionExecute(
+            self.driver, f'return {GET_EBID}("first-name-input") != null'
+        )
+        logging.info("Account successfully confirmed!")
+        console_log("Account successfully confirmed!", OK, silent_mode=SILENT_MODE)
+
 
 class EsetProtectHubKeygen(object):
-    def __init__(self, registered_email_obj: OneSecEmailAPI, eset_password: str, driver: Chrome):
+    def __init__(
+        self, registered_email_obj: OneSecEmailAPI, eset_password: str, driver: Chrome
+    ):
         self.email_obj = registered_email_obj
         self.eset_password = eset_password
         self.driver = driver
@@ -1624,59 +1982,81 @@ class EsetProtectHubKeygen(object):
         uCE = untilConditionExecute
 
         # Log in
-        logging.info('Logging in to the created account...')
-        console_log('\nLogging in to the created account...', INFO, silent_mode=SILENT_MODE)
-        self.driver.get('https://protecthub.eset.com')
+        logging.info("Logging in to the created account...")
+        console_log(
+            "\nLogging in to the created account...", INFO, silent_mode=SILENT_MODE
+        )
+        self.driver.get("https://protecthub.eset.com")
         uCE(self.driver, f'return {GET_EBID}("username") != null')
         exec_js(f'return {GET_EBID}("username")').send_keys(self.email_obj.email)
         exec_js(f'return {GET_EBID}("password")').send_keys(self.eset_password)
         exec_js(f'return {GET_EBID}("btn-login").click()')
-        
+
         # Start free trial
-        uCE(self.driver, f'return {GET_EBID}("welcome-dialog-generate-trial-license") != null', delay=3)
-        logging.info('Successfully!')
-        logging.info('Sending a request for a get license...')
-        console_log('Successfully!', OK, silent_mode=SILENT_MODE)
-        console_log('\nSending a request for a get license...', INFO, silent_mode=SILENT_MODE)
+        uCE(
+            self.driver,
+            f'return {GET_EBID}("welcome-dialog-generate-trial-license") != null',
+            delay=3,
+        )
+        logging.info("Successfully!")
+        logging.info("Sending a request for a get license...")
+        console_log("Successfully!", OK, silent_mode=SILENT_MODE)
+        console_log(
+            "\nSending a request for a get license...", INFO, silent_mode=SILENT_MODE
+        )
         try:
-            exec_js(f'return {GET_EBID}("welcome-dialog-generate-trial-license").click()')
-            exec_js(f'return {GET_EBID}("welcome-dialog-generate-trial-license")').click()
+            exec_js(
+                f'return {GET_EBID}("welcome-dialog-generate-trial-license").click()'
+            )
+            exec_js(
+                f'return {GET_EBID}("welcome-dialog-generate-trial-license")'
+            ).click()
         except:
             pass
-        
+
         # Waiting for a response from the site
         license_is_being_generated = False
         for _ in range(DEFAULT_MAX_ITER):
             try:
-                r = exec_js(f"return {GET_EBCN}('Toastify__toast-body toastBody')[0].innerText").lower()
-                if r.find('is being generated') != -1:
+                r = exec_js(
+                    f"return {GET_EBCN}('Toastify__toast-body toastBody')[0].innerText"
+                ).lower()
+                if r.find("is being generated") != -1:
                     license_is_being_generated = True
-                    logging.info('Request successfully sent!')
-                    console_log('Request successfully sent!', OK, silent_mode=SILENT_MODE)
+                    logging.info("Request successfully sent!")
+                    console_log(
+                        "Request successfully sent!", OK, silent_mode=SILENT_MODE
+                    )
                     try:
-                        exec_js(f'return {GET_EBID}("welcome-dialog-skip-button").click()')
-                        exec_js(f'return {GET_EBID}("welcome-dialog-skip-button")').click()
+                        exec_js(
+                            f'return {GET_EBID}("welcome-dialog-skip-button").click()'
+                        )
+                        exec_js(
+                            f'return {GET_EBID}("welcome-dialog-skip-button")'
+                        ).click()
                     except:
                         pass
                     break
             except Exception as E:
                 pass
             time.sleep(DEFAULT_DELAY)
-        
+
         if not license_is_being_generated:
-            raise RuntimeError('The request has not been sent!')
-        
-        logging.info('Waiting for a back response...')
-        console_log('\nWaiting for a back response...', INFO, silent_mode=SILENT_MODE)
+            raise RuntimeError("The request has not been sent!")
+
+        logging.info("Waiting for a back response...")
+        console_log("\nWaiting for a back response...", INFO, silent_mode=SILENT_MODE)
         license_was_generated = False
-        for _ in range(DEFAULT_MAX_ITER*10): # 5m
+        for _ in range(DEFAULT_MAX_ITER * 10):  # 5m
             try:
-                r = exec_js(f"return {GET_EBCN}('Toastify__toast-body toastBody')[0].innerText").lower()
-                if r.find('couldn\'t be generated') != -1:
+                r = exec_js(
+                    f"return {GET_EBCN}('Toastify__toast-body toastBody')[0].innerText"
+                ).lower()
+                if r.find("couldn't be generated") != -1:
                     break
-                elif r.find('was generated') != -1:
-                    logging.info('Successfully!')
-                    console_log('Successfully!', OK, silent_mode=SILENT_MODE)
+                elif r.find("was generated") != -1:
+                    logging.info("Successfully!")
+                    console_log("Successfully!", OK, silent_mode=SILENT_MODE)
                     license_was_generated = True
                     break
             except Exception as E:
@@ -1684,116 +2064,243 @@ class EsetProtectHubKeygen(object):
             time.sleep(DEFAULT_DELAY)
 
         if not license_was_generated:
-            raise RuntimeError('The license cannot be generated, try again later!')
+            raise RuntimeError("The license cannot be generated, try again later!")
 
         # Obtaining license data from the site
-        logging.info('[Site] License uploads...')
-        console_log('\n[Site] License uploads...', INFO, silent_mode=SILENT_MODE)
-        license_name = 'ESET PROTECT Advanced'
+        logging.info("[Site] License uploads...")
+        console_log("\n[Site] License uploads...", INFO, silent_mode=SILENT_MODE)
+        license_name = "ESET PROTECT Advanced"
         try:
-            self.driver.get('https://protecthub.eset.com/licenses')
-            uCE(self.driver, f'return {GET_EBAV}("div", "data-label", "license-list-body-cell-renderer-row-0-column-0").innerText != ""')
-            license_id = exec_js(f'{DEFINE_GET_EBAV_FUNCTION}\nreturn {GET_EBAV}("div", "data-label", "license-list-body-cell-renderer-row-0-column-0").innerText')
-            logging.info(f'License ID: {license_id}')
-            logging.info('Getting information from the license...')
-            console_log(f'License ID: {license_id}', OK, silent_mode=SILENT_MODE)
-            console_log('\nGetting information from the license...', INFO, silent_mode=SILENT_MODE)
-            self.driver.get(f'https://protecthub.eset.com/licenses/details/2/{license_id}/overview')
-            uCE(self.driver, f'return {GET_EBAV}("div", "data-label", "license-overview-validity-value") != null')
-            license_out_date = exec_js(f'{DEFINE_GET_EBAV_FUNCTION}\nreturn {GET_EBAV}("div", "data-label", "license-overview-validity-value").children[0].children[0].innerText')
+            self.driver.get("https://protecthub.eset.com/licenses")
+            uCE(
+                self.driver,
+                f'return {GET_EBAV}("div", "data-label", "license-list-body-cell-renderer-row-0-column-0").innerText != ""',
+            )
+            license_id = exec_js(
+                f'{DEFINE_GET_EBAV_FUNCTION}\nreturn {GET_EBAV}("div", "data-label", "license-list-body-cell-renderer-row-0-column-0").innerText'
+            )
+            logging.info(f"License ID: {license_id}")
+            logging.info("Getting information from the license...")
+            console_log(f"License ID: {license_id}", OK, silent_mode=SILENT_MODE)
+            console_log(
+                "\nGetting information from the license...",
+                INFO,
+                silent_mode=SILENT_MODE,
+            )
+            self.driver.get(
+                f"https://protecthub.eset.com/licenses/details/2/{license_id}/overview"
+            )
+            uCE(
+                self.driver,
+                f'return {GET_EBAV}("div", "data-label", "license-overview-validity-value") != null',
+            )
+            license_out_date = exec_js(
+                f'{DEFINE_GET_EBAV_FUNCTION}\nreturn {GET_EBAV}("div", "data-label", "license-overview-validity-value").children[0].children[0].innerText'
+            )
             # Obtaining license key
-            exec_js(f'{DEFINE_GET_EBAV_FUNCTION}\n{GET_EBAV}("div", "data-label", "license-overview-key-value").children[0].children[0].click()')
-            uCE(self.driver, f'return {GET_EBID}("show-license-key-auth-modal-password-input") != null')
-            exec_js(f'return {GET_EBID}("show-license-key-auth-modal-password-input")').send_keys(self.eset_password)
+            exec_js(
+                f'{DEFINE_GET_EBAV_FUNCTION}\n{GET_EBAV}("div", "data-label", "license-overview-key-value").children[0].children[0].click()'
+            )
+            logging.info("Waiting for password modal...")
+            uCE(
+                self.driver,
+                f'return {GET_EBID}("show-license-key-auth-modal-password-input") != null',
+                max_iter=10,
+            )
+            logging.info("Entering password...")
+            password_input = exec_js(
+                f'return {GET_EBID}("show-license-key-auth-modal-password-input")'
+            )
+            password_input.clear()
+            password_input.send_keys(self.eset_password)
+            time.sleep(0.5)
+            logging.info("Password entered")
+            logging.info("Clicking authenticate button...")
             try:
-                exec_js(f'return {GET_EBID}("show-license-key-auth-modal-authenticate").click()')
-                exec_js(f'return {GET_EBID}("show-license-key-auth-modal-authenticate")').click()
-            except:
+                auth_button = exec_js(
+                    f'return {GET_EBID}("show-license-key-auth-modal-authenticate")'
+                )
+                if auth_button:
+                    auth_button.click()
+                    logging.info("Authenticate button clicked")
+                else:
+                    logging.warning("Authenticate button not found by ID")
+            except Exception as e:
+                logging.error(f"Failed to click authenticate button: {e}")
                 pass
             for _ in range(DEFAULT_MAX_ITER):
                 try:
-                    license_key = exec_js(f'return {GET_EBAV}("div", "data-label", "license-overview-key-value").children[0].textContent.trim()')
-                    if license_key is not None and not license_key.startswith('XXXX-XXXX-XXXX-XXXX-XXXX'): # ignoring XXXX-XXXX-XXXX-XXXX-XXXX
-                        license_key = license_key.split(' ')[0]
-                        logging.info('Information successfully received!')
-                        console_log('Information successfully received!', OK, silent_mode=SILENT_MODE)
-                        return license_name, license_key, license_out_date, True # True - License key obtained from the site
+                    license_key = exec_js(
+                        f'return {GET_EBAV}("div", "data-label", "license-overview-key-value").children[0].textContent.trim()'
+                    )
+                    if license_key is not None and not license_key.startswith(
+                        "XXXX-XXXX-XXXX-XXXX-XXXX"
+                    ):  # ignoring XXXX-XXXX-XXXX-XXXX-XXXX
+                        license_key = license_key.split(" ")[0]
+                        logging.info("Information successfully received!")
+                        console_log(
+                            "Information successfully received!",
+                            OK,
+                            silent_mode=SILENT_MODE,
+                        )
+                        return (
+                            license_name,
+                            license_key,
+                            license_out_date,
+                            True,
+                        )  # True - License key obtained from the site
                 except:
                     pass
                 time.sleep(DEFAULT_DELAY)
         except Exception as E:
             logging.critical("EXC_INFO:", exc_info=True)
-            console_log('Error when obtaining a license key from the site!!!', ERROR, silent_mode=SILENT_MODE)
+            console_log(
+                "Error when obtaining a license key from the site!!!",
+                ERROR,
+                silent_mode=SILENT_MODE,
+            )
         # Obtaining license data from the email
-        logging.info('[Email] License uploads...')
-        console_log('\n[Email] License uploads...', INFO, silent_mode=SILENT_MODE)
-        if self.email_obj.class_name == 'custom':
-            logging.warning('Wait for a message to your e-mail about successful key generation!!!')
-            console_log('\nWait for a message to your e-mail about successful key generation!!!', WARN, True, SILENT_MODE)
+        logging.info("[Email] License uploads...")
+        console_log("\n[Email] License uploads...", INFO, silent_mode=SILENT_MODE)
+        if self.email_obj.class_name == "custom":
+            logging.warning(
+                "Wait for a message to your e-mail about successful key generation!!!"
+            )
+            console_log(
+                "\nWait for a message to your e-mail about successful key generation!!!",
+                WARN,
+                True,
+                SILENT_MODE,
+            )
             return None, None, None, None
-        else:    
-            license_key, license_out_date, license_id = parseEPHKey(self.email_obj, self.driver, delay=5, max_iter=30) # 2.5m 
-            logging.info(f'License ID: {license_id}')
-            logging.info('Getting information from the license...')
-            logging.info('Information successfully received!')
-            console_log(f'License ID: {license_id}', OK, silent_mode=SILENT_MODE)
-            console_log('\nGetting information from the license...', INFO, silent_mode=SILENT_MODE)
-            console_log('Information successfully received!', OK, silent_mode=SILENT_MODE)
-            return license_name, license_key, license_out_date, False # False - License key obtained from the email
-    
+        else:
+            license_key, license_out_date, license_id = parseEPHKey(
+                self.email_obj, self.driver, delay=5, max_iter=30
+            )  # 2.5m
+            logging.info(f"License ID: {license_id}")
+            logging.info("Getting information from the license...")
+            logging.info("Information successfully received!")
+            console_log(f"License ID: {license_id}", OK, silent_mode=SILENT_MODE)
+            console_log(
+                "\nGetting information from the license...",
+                INFO,
+                silent_mode=SILENT_MODE,
+            )
+            console_log(
+                "Information successfully received!", OK, silent_mode=SILENT_MODE
+            )
+            return (
+                license_name,
+                license_key,
+                license_out_date,
+                False,
+            )  # False - License key obtained from the email
+
     def removeLicense(self):
-        logging.info('Deleting the key from the account, the key will still work...')
-        console_log('Deleting the key from the account, the key will still work...', INFO, silent_mode=SILENT_MODE)
+        logging.info("Deleting the key from the account, the key will still work...")
+        console_log(
+            "Deleting the key from the account, the key will still work...",
+            INFO,
+            silent_mode=SILENT_MODE,
+        )
         try:
-            self.driver.execute_script(f'return {GET_EBID}("license-actions-button")').click()
+            self.driver.execute_script(
+                f'return {GET_EBID}("license-actions-button")'
+            ).click()
             time.sleep(1)
-            button = self.driver.find_element('xpath', '//a[.//div[text()="Remove license"]]')
+            button = self.driver.find_element(
+                "xpath", '//a[.//div[text()="Remove license"]]'
+            )
             if button is not None:
                 button.click()
-            untilConditionExecute(self.driver, f'return {CLICK_WITH_BOOL}({GET_EBID}("remove-license-dlg-remove-btn"))', max_iter=15)
+            untilConditionExecute(
+                self.driver,
+                f'return {CLICK_WITH_BOOL}({GET_EBID}("remove-license-dlg-remove-btn"))',
+                max_iter=15,
+            )
             time.sleep(2)
-            for _ in range(DEFAULT_MAX_ITER//2):
+            for _ in range(DEFAULT_MAX_ITER // 2):
                 try:
-                    self.driver.execute_script(f'return {GET_EBID}("remove-license-dlg-remove-btn")').click()
+                    self.driver.execute_script(
+                        f'return {GET_EBID}("remove-license-dlg-remove-btn")'
+                    ).click()
                 except:
                     pass
-                if self.driver.page_source.lower().find('to keep the solutions up to date') == -1:
+                if (
+                    self.driver.page_source.lower().find(
+                        "to keep the solutions up to date"
+                    )
+                    == -1
+                ):
                     time.sleep(1)
-                    logging.info('Key successfully deleted!!!')
-                    console_log('Key successfully deleted!!!', OK, silent_mode=SILENT_MODE)
+                    logging.info("Key successfully deleted!!!")
+                    console_log(
+                        "Key successfully deleted!!!", OK, silent_mode=SILENT_MODE
+                    )
                     return True
                 time.sleep(DEFAULT_DELAY)
         except:
             pass
-        logging.error('Failed to delete key, this error has no effect on the operation of the key!!!')
-        console_log('Failed to delete key, this error has no effect on the operation of the key!!!', ERROR, silent_mode=SILENT_MODE)
+        logging.error(
+            "Failed to delete key, this error has no effect on the operation of the key!!!"
+        )
+        console_log(
+            "Failed to delete key, this error has no effect on the operation of the key!!!",
+            ERROR,
+            silent_mode=SILENT_MODE,
+        )
 
-def EsetVPNResetWindows(key_path='SOFTWARE\\ESET\\ESET VPN', value_name='authHash'):
+
+def EsetVPNResetWindows(key_path="SOFTWARE\\ESET\\ESET VPN", value_name="authHash"):
     """Deletes the authHash value of ESET VPN"""
     try:
-        subprocess.check_output(['taskkill', '/f', '/im', 'esetvpn.exe'], stderr=subprocess.DEVNULL)
+        subprocess.check_output(
+            ["taskkill", "/f", "/im", "esetvpn.exe"], stderr=subprocess.DEVNULL
+        )
     except:
         pass
     try:
         import winreg
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_ALL_ACCESS) as key:
+
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_ALL_ACCESS
+        ) as key:
             winreg.DeleteValue(key, value_name)
-        logging.info('ESET VPN has been successfully reset!!!')
-        console_log('ESET VPN has been successfully reset!!!', OK, silent_mode=SILENT_MODE)
+        logging.info("ESET VPN has been successfully reset!!!")
+        console_log(
+            "ESET VPN has been successfully reset!!!", OK, silent_mode=SILENT_MODE
+        )
     except FileNotFoundError:
-        logging.error(f'The registry value or key does not exist: {key_path}\\{value_name}')
-        console_log(f'The registry value or key does not exist: {key_path}\\{value_name}', ERROR, silent_mode=SILENT_MODE)
+        logging.error(
+            f"The registry value or key does not exist: {key_path}\\{value_name}"
+        )
+        console_log(
+            f"The registry value or key does not exist: {key_path}\\{value_name}",
+            ERROR,
+            silent_mode=SILENT_MODE,
+        )
     except PermissionError:
-        logging.error(f'Permission denied while accessing: {key_path}\\{value_name}')
-        console_log(f'Permission denied while accessing: {key_path}\\{value_name}', ERROR, silent_mode=SILENT_MODE)
+        logging.error(f"Permission denied while accessing: {key_path}\\{value_name}")
+        console_log(
+            f"Permission denied while accessing: {key_path}\\{value_name}",
+            ERROR,
+            silent_mode=SILENT_MODE,
+        )
     except Exception as e:
         raise RuntimeError(e)
 
-def EsetVPNResetMacOS(app_name='ESET VPN', file_name='Preferences/com.eset.ESET VPN.plist'):
+
+def EsetVPNResetMacOS(
+    app_name="ESET VPN", file_name="Preferences/com.eset.ESET VPN.plist"
+):
     try:
         # Use AppleScript to quit the application
         script = f'tell application "{app_name}" to quit'
-        subprocess.run(["osascript", "-e", script], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(
+            ["osascript", "-e", script],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
     except:
         pass
     try:
@@ -1803,10 +2310,14 @@ def EsetVPNResetMacOS(app_name='ESET VPN', file_name='Preferences/com.eset.ESET 
         # Check if the file exists and remove it
         if library_path.is_file():
             library_path.unlink()
-            logging.info('ESET VPN has been successfully reset!!!')
-            console_log('ESET VPN has been successfully reset!!!', OK, silent_mode=SILENT_MODE)
+            logging.info("ESET VPN has been successfully reset!!!")
+            console_log(
+                "ESET VPN has been successfully reset!!!", OK, silent_mode=SILENT_MODE
+            )
         else:
             logging.error(f"File '{file_name}' does not exist!!!")
-            console_log(f"File '{file_name}' does not exist!!!", ERROR, silent_mode=SILENT_MODE)
+            console_log(
+                f"File '{file_name}' does not exist!!!", ERROR, silent_mode=SILENT_MODE
+            )
     except Exception as e:
         raise RuntimeError(e)

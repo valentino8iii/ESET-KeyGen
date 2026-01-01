@@ -1,10 +1,11 @@
 import contextlib
+import io
+import json
 import logging
 import pathlib
-import json
-import sys
-import io
 import random
+import sys
+
 import requests
 
 I_AM_EXECUTABLE = (True if (getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS')) else False)
@@ -112,28 +113,26 @@ MBCI_OTHER_ARGS = [
 MBCI_ARGS = MBCI_BROWSERS_ARGS + MBCI_MODES_OF_OPERATION_ARGS + MBCI_OTHER_ARGS
 # -----------------------------------------------------------------------------------------------
 
-from modules.WebDriverInstaller import *
-
-from modules.EsetTools import EsetRegister as ER
-from modules.EsetTools import EsetKeygen as EK
-from modules.EsetTools import EsetVPN as EV
-from modules.EsetTools import EsetProtectHubRegister as EPHR
-from modules.EsetTools import EsetProtectHubKeygen as EPHK
-from modules.EsetTools import EsetVPNResetWindows as EVRW
-from modules.EsetTools import EsetVPNResetMacOS as EVRM
-from modules.EsetTools import IPBlockedException
-
-from modules.SharedTools import *
-from modules.MBCI import *
-
-from modules.Updater import Updater
-
-import traceback
-import colorama
-import platform
-import datetime
 import argparse
+import datetime
+import platform
 import re
+import traceback
+
+import colorama
+
+from modules.EsetTools import EsetKeygen as EK
+from modules.EsetTools import EsetProtectHubKeygen as EPHK
+from modules.EsetTools import EsetProtectHubRegister as EPHR
+from modules.EsetTools import EsetRegister as ER
+from modules.EsetTools import EsetVPN as EV
+from modules.EsetTools import EsetVPNResetMacOS as EVRM
+from modules.EsetTools import EsetVPNResetWindows as EVRW
+from modules.EsetTools import IPBlockedException
+from modules.MBCI import *
+from modules.SharedTools import *
+from modules.Updater import Updater
+from modules.WebDriverInstaller import *
 
 # -----------------------------------------------------------------------------------------------
 
