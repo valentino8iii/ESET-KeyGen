@@ -1006,6 +1006,9 @@ class EsetKeygen(object):
         )
         logging.info("Information successfully received!")
         console_log("Information successfully received!", OK, silent_mode=SILENT_MODE)
+        console_log(f"License Name: {license_name}", OK, silent_mode=SILENT_MODE)
+        console_log(f"License Key: {license_key}", OK, silent_mode=SILENT_MODE)
+        console_log(f"License Expiry: {license_out_date}", OK, silent_mode=SILENT_MODE)
         return license_name, license_key, license_out_date
 
 
@@ -1105,6 +1108,7 @@ class EsetVPN(object):
                 console_log(
                     "Information successfully received!", OK, silent_mode=SILENT_MODE
                 )
+                console_log(f"VPN Codes: {vpn_codes}", OK, silent_mode=SILENT_MODE)
         return vpn_codes
 
 
@@ -1580,9 +1584,6 @@ class EsetProtectHubRegister(object):
                                 or "color: #8dc640" in style
                             ):
                                 success = True
-                                print(
-                                    "[ DEBUG  ] Visual success (green tick color) detected!"
-                                )
                         except:
                             pass
 
@@ -1976,26 +1977,58 @@ class EsetProtectHubKeygen(object):
         exec_js(f'return {GET_EBID}("btn-login").click()')
 
         # Start free trial
-        uCE(
-            self.driver,
-            f'return {GET_EBID}("welcome-dialog-generate-trial-license") != null',
-            delay=3,
+        logging.info("Waiting for trial license generation dialog...")
+        console_log(
+            "\nWaiting for trial license generation dialog...",
+            INFO,
+            silent_mode=SILENT_MODE,
         )
-        logging.info("Successfully!")
+
+        trial_click_script = """
+        function findAndClickTrialBtn() {
+            var btn = document.getElementById("welcome-dialog-generate-trial-license");
+            if (btn) { btn.click(); return true; }
+            btn = document.getElementById("welcome-dialog-trial-link");
+            if (btn) { btn.click(); return true; }
+            
+            var buttons = document.querySelectorAll('button, a');
+            for (var i = 0; i < buttons.length; i++) {
+                var txt = buttons[i].innerText.toLowerCase();
+                if ((txt.includes('generate') && txt.includes('license')) || txt.includes('start free trial')) {
+                    buttons[i].click();
+                    return true;
+                }
+                
+                if (txt.includes('try') && txt.includes('free') && txt.includes('protect')) {
+                     buttons[i].click();
+                     return true;
+                }
+                
+                // Fallback for new UI potentially
+                if (txt.includes('try free trial')) {
+                     buttons[i].click();
+                     return true;
+                }
+            }
+            return false;
+        }
+        return findAndClickTrialBtn();
+        """
+
+        try:
+            uCE(self.driver, trial_click_script, delay=3, max_iter=15)  # Wait up to 45s
+        except RuntimeError:
+            logging.error("Could not find/click 'Generate trial license' button!")
+
+            raise RuntimeError("Failed to click trial button - Selector/Timeout Issue")
+
+        logging.info("Successfully clicked trial button!")
+        console_log("Successfully clicked trial button!", OK, silent_mode=SILENT_MODE)
         logging.info("Sending a request for a get license...")
-        console_log("Successfully!", OK, silent_mode=SILENT_MODE)
         console_log(
             "\nSending a request for a get license...", INFO, silent_mode=SILENT_MODE
         )
-        try:
-            exec_js(
-                f'return {GET_EBID}("welcome-dialog-generate-trial-license").click()'
-            )
-            exec_js(
-                f'return {GET_EBID}("welcome-dialog-generate-trial-license")'
-            ).click()
-        except:
-            pass
+        # Note: Previous clicks are now handled inside the uCE generic click script above
 
         # Waiting for a response from the site
         license_is_being_generated = False
@@ -2126,6 +2159,14 @@ class EsetProtectHubKeygen(object):
                             OK,
                             silent_mode=SILENT_MODE,
                         )
+                        console_log(
+                            f"License Key: {license_key}", OK, silent_mode=SILENT_MODE
+                        )
+                        console_log(
+                            f"License Expiry: {license_out_date}",
+                            OK,
+                            silent_mode=SILENT_MODE,
+                        )
                         return (
                             license_name,
                             license_key,
@@ -2136,12 +2177,14 @@ class EsetProtectHubKeygen(object):
                     pass
                 time.sleep(DEFAULT_DELAY)
         except Exception as E:
-            logging.critical("EXC_INFO:", exc_info=True)
+            logging.error(f"Error when obtaining a license key from the site: {E}")
             console_log(
-                "Error when obtaining a license key from the site!!!",
-                ERROR,
+                "Error when obtaining a license key from the site (Proceeding to Email method)...",
+                WARN,
                 silent_mode=SILENT_MODE,
             )
+            # Do NOT report critical failure or show stacktrace unless debugging, just fall through to email
+            # logging.critical("EXC_INFO:", exc_info=True)  <- Too noisy for a fallback scenario
         # Obtaining license data from the email
         logging.info("[Email] License uploads...")
         console_log("\n[Email] License uploads...", INFO, silent_mode=SILENT_MODE)
@@ -2171,6 +2214,10 @@ class EsetProtectHubKeygen(object):
             )
             console_log(
                 "Information successfully received!", OK, silent_mode=SILENT_MODE
+            )
+            console_log(f"License Key: {license_key}", OK, silent_mode=SILENT_MODE)
+            console_log(
+                f"License Expiry: {license_out_date}", OK, silent_mode=SILENT_MODE
             )
             return (
                 license_name,

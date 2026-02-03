@@ -661,16 +661,15 @@ def parseEPHKey(email_obj, driver=None, delay=DEFAULT_DELAY, max_iter=DEFAULT_MA
 
             # Debug and process inbox (OUTSIDE retry loop)
             if inbox:
-                print(f"[ DEBUG ] Inbox found {len(inbox)} messages.")  # DEBUG
+                # print(f"[ DEBUG ] Inbox found {len(inbox)} messages.")  # DEBUG
+                pass
             else:
-                print("[ DEBUG ] Inbox is empty (or None).")  # DEBUG
+                # print("[ DEBUG ] Inbox is empty (or None).")  # DEBUG
+                pass
 
             if inbox:
                 for mail in inbox:
                     mail_id, mail_from, mail_subject = mail
-                    print(
-                        f"[ DEBUG ] Checking mail: ID={mail_id}, Subject='{mail_subject}'"
-                    )  # DEBUG
                     subject_lower = mail_subject.lower()
                     # Support both email formats (case-insensitive, avoid smart quote issues)
                     if (
