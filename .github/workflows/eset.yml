@@ -1,22 +1,22 @@
 name: Account and Key Generator
 
 on:
- # schedule: #if need schedule 
- #   - cron: "0 */2 * * *"
+  # schedule: #if need schedule
+  #   - cron: "0 */2 * * *"
   workflow_dispatch:
     inputs:
       account:
-        description: 'Number of Accounts to be generated (default = 0)'
+        description: "Number of Accounts to be generated (default = 0)"
         required: false
-        default: '0'
+        default: "0"
         type: string
       key:
-        description: 'Number of Keys to be generated (default = 1)'
+        description: "Number of Keys to be generated (default = 1)"
         required: false
-        default: '1'
+        default: "1"
         type: string
       mail:
-        description: 'Choose the mail provider to generate license'
+        description: "Choose the mail provider to generate license"
         required: true
         type: choice
         options:
@@ -33,7 +33,7 @@ on:
           - tempmail
         default: emailfake
       key_type:
-        description: 'Modes of operation'
+        description: "Modes of operation"
         required: true
         type: choice
         options:
@@ -41,14 +41,14 @@ on:
           - --small-business-key
         default: --key
       os:
-        description: 'Operating System of runner (Linux, macOS, Windows)'
+        description: "Operating System of runner (Linux, macOS, Windows)"
         required: true
         type: choice
         options:
           - ubuntu-latest
           - macos-latest
           - windows-latest
-        default: windows-latest
+        default: windows-2019
       branch:
         description: "Repository branch (don't touch it if you don't know what it is!!!)"
         required: false
@@ -58,23 +58,23 @@ on:
           - test
         default: main
       use_vpn:
-        description: 'Enable Cloudflare WARP VPN'
+        description: "Enable Cloudflare WARP VPN"
         required: false
         type: boolean
         default: false
       generate_debug_artifacts:
-        description: 'Upload debug artifacts (debug_*)'
+        description: "Upload debug artifacts (debug_*)"
         required: false
         type: boolean
         default: false
 
 jobs:
   generate-account-and-key:
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.os || 'windows-latest' }} #if fallback then
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.os || 'windows-2019' }} #if fallback then
     steps:
       - name: Set Variables
         id: vars
-        shell: bash 
+        shell: bash
         run: |
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             echo "account=${{ github.event.inputs.account }}" >> $GITHUB_OUTPUT
@@ -122,14 +122,14 @@ jobs:
           echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/cloudflare-client.list
           sudo apt-get update
           sudo apt-get install -y cloudflare-warp
-          
+
           echo "Registering WARP..."
           warp-cli registration new
-          
+
           echo "Connecting to WARP..."
           warp-cli connect
           sleep 15
-          
+
           echo "Waiting for WARP connection..."
           for i in {1..12}; do
             status=$(warp-cli status)
@@ -140,7 +140,7 @@ jobs:
             fi
             sleep 5
           done
-          
+
           echo "Checking connection..."
           curl -s https://www.cloudflare.com/cdn-cgi/trace/ | tee /dev/stderr | grep -q "warp=on" || echo "Warning: WARP may not be fully active"
 
@@ -191,20 +191,20 @@ jobs:
           Invoke-WebRequest -Uri "https://1111-releases.cloudflareclient.com/windows/Cloudflare_WARP_Release-x64.msi" -OutFile "$env:TEMP\Cloudflare_WARP.msi"
           Start-Process msiexec.exe -Wait -ArgumentList "/i $env:TEMP\Cloudflare_WARP.msi /qn"
           Start-Sleep -Seconds 15
-          
+
           $warpCli = "C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe"
-          
+
           Write-Host "Accepting WARP ToS..."
           & $warpCli registration new
           if ($LASTEXITCODE -ne 0) {
             Write-Host "Registration failed, trying license accept..."
             & $warpCli registration license accept
           }
-          
+
           Write-Host "Connecting to WARP..."
           & $warpCli connect
           Start-Sleep -Seconds 15
-          
+
           Write-Host "Waiting for WARP to be fully connected..."
           $maxRetries = 12
           $retryCount = 0
@@ -218,7 +218,7 @@ jobs:
             Start-Sleep -Seconds 5
             $retryCount++
           }
-          
+
           Write-Host "Checking connection..."
           $trace = Invoke-RestMethod -Uri "https://www.cloudflare.com/cdn-cgi/trace/"
           Write-Host $trace
