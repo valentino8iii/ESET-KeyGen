@@ -5,3 +5,6 @@
 .DS_STORE
 venv
 .vscode
+.agent
+*.html
+*.png
